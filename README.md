@@ -3,13 +3,13 @@
 ![simdref inlay hints in a .s file in IntelliJ IDEA](https://raw.githubusercontent.com/simd-labs/jetbrains-simdref/screenshots/idea-asm.png)
 ![simdref inlay hints in a .cpp file in IntelliJ IDEA](https://raw.githubusercontent.com/simd-labs/jetbrains-simdref/screenshots/idea-cpp.png)
 
-This plugin shows SIMD instruction documentation in JetBrains IDEs. It runs the `simdref-lsp` language server for hover text and inlay hints.
+This plugin shows SIMD instruction documentation in JetBrains IDEs. It runs the `simdref-lsp` language server for hover text and a one-line brief in an inlay hint.
 
 The plugin is active in assembly files (`.s`, `.S`, `.asm`).
 Also in C and C++ files (`.c`, `.cc`, `.cpp`, `.cxx`, `.c++`, `.h`, `.hpp`, `.hh`, `.hxx`, `.cu`, `.cuh`).
 In C and C++, the server gives hints only in `asm` string literals.
 
-The Quick Documentation command shows the full simdref page from the local catalog, no network. The shortcut is Ctrl+Q on Linux and Windows, F1 on macOS.
+Quick Documentation shows the full simdref page from the local catalog. It works offline. The shortcut is Ctrl+Q on Linux and Windows, F1 on macOS.
 
 ## Supported IDEs
 
@@ -17,7 +17,7 @@ The plugin uses the native JetBrains LSP API (`com.intellij.modules.lsp`). The I
 
 - CLion, IntelliJ IDEA (unified), and other JetBrains IDEs that ship the LSP API. IDEA Community and Android Studio do not.
 
-Inlay hints: simdref 0.0.8 or newer. The plugin installs it.
+Inlay hints: the plugin installs the newest simdref.
 The IDE caps LSP inlay hints at 42 characters. The plugin increases this limit to 100 (the platform maximum) through `LspInlayHintSupport.getMaxInlayHintChars`.
 
 ## Automatic install
@@ -26,7 +26,7 @@ The plugin looks for the server in this sequence:
 
 1. `simdref-lsp` on `PATH`.
 2. A previous install in `<IDE system dir>/simdref`.
-3. The plugin downloads `uv` into `<IDE system dir>/simdref`, runs `uv tool install simdref` and `isa update` there, all as a background task. The SHA-256 check catches a corrupt download, not a tampered release.
+3. The plugin downloads `uv` into `<IDE system dir>/simdref`. It runs `uv tool install simdref` and `isa update` there as a background task. The SHA-256 check catches a corrupt download, not a tampered release.
 
 On an error, the plugin shows a notification with a link to these instructions. The next file open retries.
 
@@ -41,7 +41,7 @@ isa update
 
 ## Troubleshooting
 
-If `simdref-lsp` is on `PATH`, the plugin uses it. Inlay hints: simdref 0.0.8 or newer (`uv tool upgrade simdref`).
+If `simdref-lsp` is on `PATH`, the plugin uses it. For inlay hints, upgrade: `uv tool upgrade simdref`.
 
 ## Development install
 

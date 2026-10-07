@@ -1,6 +1,6 @@
 # Podman test environment
 
-This environment runs IntelliJ IDEA 2026.1 headless in rootless podman and checks that the plugin installs and starts `simdref-lsp`. CLion SIGSEGVs in rootless podman (after the Data Sharing dialog). IDEA has the same LSP API and survives.
+This environment runs IntelliJ IDEA 2026.1 headless in rootless podman. It checks that the plugin installs and starts `simdref-lsp`. CLion SIGSEGVs in rootless podman (after the Data Sharing dialog). IDEA has the same LSP API and survives.
 
 ## Files
 
@@ -50,7 +50,7 @@ Run the install check first.
 podman run --rm --userns=keep-id -v "$PWD":/repo localhost/jb-simdref-idea-nolsp bash /repo/test/podman/screenshot.sh
 ```
 
-Success is exit code 0 and two files: `work/out/shot-s.png` (assembly) and `work/out/shot-cpp.png` (C with an `asm` string). Inlay hints use simdref 0.0.8 or newer.
+Success is exit code 0 and two files: `work/out/shot-s.png` (assembly) and `work/out/shot-cpp.png` (C with an `asm` string). Inlay hints use the newest simdref.
 
 ## Update the screenshots
 

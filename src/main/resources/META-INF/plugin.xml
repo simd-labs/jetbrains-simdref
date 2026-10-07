@@ -1,0 +1,12 @@
+<idea-plugin>
+    <id>dev.simdlabs.simdref</id>
+    <name>simdref</name>
+    <vendor>simd-labs</vendor>
+    <description>SIMD instruction hover and inlay hints for assembly and inline asm, powered by the simdref-lsp language server.</description>
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lsp</depends>
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="simdref" displayType="STICKY_BALLOON"/>
+        <platform.lsp.serverSupportProvider implementation="dev.simdlabs.simdref.SimdrefLspServerSupportProvider"/>
+    </extensions>
+</idea-plugin>

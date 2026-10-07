@@ -1,0 +1,127 @@
+package dev.simdlabs.simdref
+
+import java.net.ServerSocket
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.TimeUnit
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ServerInstallerTest {
+    @Test
+    fun uvEnvKeepsAllWritesUnderDir() {
+        val dir = Path.of("/tmp/simdref-x")
+        val env = ServerInstaller.uvEnv(dir)
+        for (key in listOf("UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "UV_PYTHON_INSTALL_DIR", "UV_CACHE_DIR")) {
+            val value = env[key] ?: error("missing $key")
+            assertTrue("$key not under $dir", value.startsWith(dir.toString() + "/"))
+        }
+    }
+
+    @Test
+    fun checksumMatchesGoodAndBadHash() {
+        val file = Files.createTempFile("sha", ".bin")
+        Files.writeString(file, "abc")
+        // sha256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+        assertTrue(checksumMatches(file, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"))
+        assertFalse(checksumMatches(file, "0000000000000000000000000000000000000000000000000000000000000000"))
+        Files.deleteIfExists(file)
+    }
+
+    @Test
+    fun parseChecksumReadsFirstToken() {
+        assertEquals("ba7816bf", parseChecksum("ba7816bf  uv.tar.gz\n"))
+    }
+
+    /**
+     * Extracts a tar.gz built in the test through the same function the installer
+     * uses. The tar holds one file with mode 0755 under one top-level directory.
+     * Asserts the file exists in the target dir and is executable.
+     * Mutation check: break the extraction call and this test FAILS.
+     */
+    @Test
+    fun extractArchiveKeepsExecBit() {
+        val tmp = Files.createTempDirectory("simdref-extract")
+        val tarGz = tmp.resolve("tool.tar.gz")
+        val payload = "echo hi\n".toByteArray()
+        val tar = buildTar(prefix = "tool-x86_64-unknown-linux-gnu", fileName = "tool", mode = 0b111101101, data = payload)
+        java.util.zip.GZIPOutputStream(Files.newOutputStream(tarGz)).use { it.write(tar) }
+
+        val out = tmp.resolve("out")
+        Files.createDirectories(out)
+        ServerInstaller.extractArchive(tarGz, out, "tool-x86_64-unknown-linux-gnu")
+
+        val f = out.resolve("tool")
+        assertTrue("extracted file missing", Files.exists(f))
+        if (!com.intellij.openapi.util.SystemInfo.isWindows) assertTrue("exec bit lost", Files.isExecutable(f))
+        assertTrue(Files.readAllBytes(f).contentEquals(payload))
+    }
+
+    /**
+     * Points fetchUrlText at a local ServerSocket that accepts and never answers.
+     * A short read timeout must make the call fail within a few seconds.
+     * Mutation check: drop the read timeout and this test FAILS with a JUnit timeout.
+     */
+    @Test(timeout = 5000)
+    fun stalledServerFailsWithinTimeout() {
+        val server = ServerSocket(0)
+        val accepted = Thread {
+            try {
+                val client = server.accept()
+                Thread.sleep(10_000)
+                client.close()
+            } catch (_: Exception) {
+            }
+        }
+        accepted.isDaemon = true
+        accepted.start()
+        val start = System.nanoTime()
+        val url = URI("http://127.0.0.1:${server.localPort}/").toURL()
+        try {
+            fetchUrlText(url, 200)
+            error("expected a timeout")
+        } catch (e: java.net.SocketTimeoutException) {
+            // expected
+        } finally {
+            server.close()
+        }
+        val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
+        assertTrue("too slow: ${elapsedMs}ms", elapsedMs < 4_000)
+    }
+
+    /** Minimal ustar writer: one regular file with the given mode. */
+    private fun buildTar(prefix: String, fileName: String, mode: Int, data: ByteArray): ByteArray {
+        val buf = java.io.ByteArrayOutputStream()
+        fun header(name: String, size: Int): ByteArray {
+            val h = ByteArray(512)
+            val nameBytes = name.toByteArray(Charsets.US_ASCII)
+            System.arraycopy(nameBytes, 0, h, 0, minOf(nameBytes.size, 100))
+            val modeStr = "%07o\u0000".format(mode)
+            System.arraycopy(modeStr.toByteArray(Charsets.US_ASCII), 0, h, 100, 8)
+            val uidGid = "0000000\u0000"
+            System.arraycopy(uidGid.toByteArray(Charsets.US_ASCII), 0, h, 108, 8)
+            System.arraycopy(uidGid.toByteArray(Charsets.US_ASCII), 0, h, 116, 8)
+            val sizeStr = "%011o\u0000".format(size)
+            System.arraycopy(sizeStr.toByteArray(Charsets.US_ASCII), 0, h, 124, 12)
+            val mtime = "00000000000\u0000"
+            System.arraycopy(mtime.toByteArray(Charsets.US_ASCII), 0, h, 136, 12)
+            for (i in 148 until 156) h[i] = ' '.code.toByte()
+            h[156] = '0'.code.toByte()
+            val magic = "ustar\u000000"
+            System.arraycopy(magic.toByteArray(Charsets.US_ASCII), 0, h, 257, 8)
+            var sum = 0
+            for (b in h) sum += b.toInt() and 0xFF
+            val cksum = String.format("%06o\u0000 ", sum)
+            System.arraycopy(cksum.toByteArray(Charsets.US_ASCII), 0, h, 148, 8)
+            return h
+        }
+        buf.write(header("$prefix/$fileName", data.size))
+        buf.write(data)
+        buf.write(ByteArray((512 - data.size % 512) % 512))
+        buf.write(ByteArray(1024)) // two zero blocks end the archive
+        return buf.toByteArray()
+    }
+}

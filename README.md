@@ -1,7 +1,7 @@
 # simdref for JetBrains IDEs
 
-![simdref inlay hints in a .s file in IntelliJ IDEA](docs/idea-asm.png)
-![simdref inlay hints in a .cpp file in IntelliJ IDEA](docs/idea-cpp.png)
+![simdref inlay hints in a .s file in IntelliJ IDEA](https://raw.githubusercontent.com/simd-labs/jetbrains-simdref/screenshots/idea-asm.png)
+![simdref inlay hints in a .cpp file in IntelliJ IDEA](https://raw.githubusercontent.com/simd-labs/jetbrains-simdref/screenshots/idea-cpp.png)
 
 This plugin shows SIMD instruction documentation in CLion and other JetBrains IDEs. It starts the `simdref-lsp` language server. The server gives hover text and inlay hints for instructions.
 

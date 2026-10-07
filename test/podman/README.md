@@ -55,6 +55,10 @@ podman run --rm --userns=keep-id -v "$PWD":/repo localhost/jb-simdref-idea-nolsp
 
 Success means exit code 0 and two files, `work/out/shot-s.png` (assembly) and `work/out/shot-cpp.png` (C with an `asm` string). Look at both images. Inlay hints need simdref 0.0.8 or newer.
 
+## Update the screenshots
+
+To update the screenshots in the main README, replace the single commit on the `screenshots` branch. It is an orphan branch. Force-push it. Never commit PNGs to `main`.
+
 ## Notes
 
 - Never pass the host `DISPLAY` or `WAYLAND_DISPLAY` to the container. The scripts start their own Xvfb on `:99`.

@@ -5,6 +5,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
+import com.intellij.platform.lsp.api.customization.LspCustomization
+import com.intellij.platform.lsp.api.customization.LspInlayHintSupport
 
 val SUPPORTED_EXTENSIONS = setOf("s", "S", "asm", "c", "cc", "cpp", "cxx", "c++", "h", "hpp", "hh", "hxx", "cu", "cuh")
 
@@ -24,6 +26,13 @@ class SimdrefLspServerSupportProvider : LspServerSupportProvider {
 @Suppress("DEPRECATION")
 class SimdrefLspServerDescriptor(project: Project, private val bin: String) :
     ProjectWideLspServerDescriptor(project, "simdref") {
+    // The platform cuts LSP inlay hints at 42 chars by default (LspInlayHintSupport.getMaxInlayHintChars,
+    // clamped to 100 max in LspInlayHintsProvider). Instruction briefs are up to 60 chars, so raise it.
+    override val lspCustomization = object : LspCustomization() {
+        override val inlayHintCustomizer = object : LspInlayHintSupport() {
+            override fun getMaxInlayHintChars() = 100
+        }
+    }
     override fun isSupportedFile(file: VirtualFile) = isSupportedExtension(file.extension)
     override fun createCommandLine() = GeneralCommandLine(bin)
 }

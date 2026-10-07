@@ -17,7 +17,8 @@ The plugin uses the native JetBrains LSP API (`com.intellij.modules.lsp`). It ne
 
 IntelliJ IDEA Community builds and Android Studio do not have the LSP API.
 
-Inlay hints need simdref 0.0.8 or newer. Release 0.0.7 does not have `textDocument/inlayHint` support.
+Inlay hints need simdref 0.0.8 or newer (on PyPI). The plugin installs it for you.
+The IDE cuts LSP inlay hints at 42 characters by default. The plugin raises this limit to 100 through `LspInlayHintSupport.getMaxInlayHintChars` (the platform clamps it to 100).
 
 ## Automatic install
 

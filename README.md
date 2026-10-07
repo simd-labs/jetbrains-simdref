@@ -5,40 +5,41 @@
 
 This plugin shows SIMD instruction documentation in CLion and other JetBrains IDEs. It starts the `simdref-lsp` language server. The server gives hover text and inlay hints for instructions.
 
-It works in assembly files (`.s`, `.S`, `.asm`) and in C and C++ files (`.c`, `.cc`, `.cpp`, `.cxx`, `.c++`, `.h`, `.hpp`, `.hh`, `.hxx`, `.cu`, `.cuh`). In C and C++, the server gives hints only inside `asm` string literals.
+The plugin is active in assembly files (`.s`, `.S`, `.asm`).
+It is also active in C and C++ files (`.c`, `.cc`, `.cpp`, `.cxx`, `.c++`, `.h`, `.hpp`, `.hh`, `.hxx`, `.cu`, `.cuh`).
+In C and C++, the server gives hints only in `asm` string literals.
+
+The Quick Documentation command shows the full simdref page from the local catalog, no network. The shortcut is Ctrl+Q on Linux and Windows, F1 on macOS.
 
 ## Supported IDEs
 
-The plugin uses the native JetBrains LSP API (`com.intellij.modules.lsp`). It needs version 2026.1 or later, up to and including 2026.2.
+The plugin uses the native JetBrains LSP API (`com.intellij.modules.lsp`). The IDE version must be 2026.1 through 2026.2.
 
 - CLion, including the non-commercial license.
-- IntelliJ IDEA (unified build, free tier included).
+- IntelliJ IDEA (unified release, free tier included).
 - Other commercial JetBrains IDEs that ship the LSP API.
 
-IntelliJ IDEA Community builds and Android Studio do not have the LSP API.
+IntelliJ IDEA Community and Android Studio do not have the LSP API.
 
-Inlay hints need simdref 0.0.8 or newer (on PyPI). The plugin installs it for you.
-The IDE cuts LSP inlay hints at 42 characters by default. The plugin raises this limit to 100 through `LspInlayHintSupport.getMaxInlayHintChars` (the platform clamps it to 100).
+Inlay hints: simdref 0.0.8 or newer (on PyPI). The plugin installs it.
+The IDE cuts LSP inlay hints at 42 characters by default. The plugin increases this limit to 100 through `LspInlayHintSupport.getMaxInlayHintChars` (the platform caps it at 100).
 
 ## Automatic install
 
-The plugin looks for the server in this order:
+The plugin looks for the server in this sequence:
 
 1. `simdref-lsp` on `PATH`.
 2. A previous install in `<IDE system dir>/simdref`.
-3. A new install. The plugin downloads `uv` into `<IDE system dir>/simdref` and checks its
-   SHA-256 against the release checksum before it unpacks the archive with the IDE's own
-   extractor, so no external `tar` tool is needed on any OS. It runs
-   `uv tool install simdref` and `isa update` there. The uv tool dir, bin dir, Python install
-   dir and cache dir all stay under `<IDE system dir>/simdref`. This runs as a background
-   task with a progress bar.
+3. A new install. The plugin downloads `uv` into `<IDE system dir>/simdref` and
+   checks its SHA-256 against the release checksum. The IDE's own extractor
+   writes the archive contents to disk, so the plugin uses no external `tar`
+   tool on each OS. It runs `uv tool install simdref` and `isa update` there.
+   The uv tool dir, bin dir, Python install dir and cache dir all stay below
+   `<IDE system dir>/simdref`. This runs as a background task.
 
-The checksum comes from the `.sha256` file of the same GitHub release. This catches a corrupt
-download. It does not catch a tampered release, because checksum and archive come from the
-same place.
+The checksum comes from the `.sha256` file of the same GitHub release. The check catches a corrupt download. It does not catch a tampered release: checksum and archive come from the same position.
 
-If a step fails, the plugin shows a notification with the error and an action that opens the
-instructions. The next matching file open runs the install again.
+When a step has an error, the plugin shows a notification with the error and a link that opens the instructions. The next supported file open runs the install again.
 
 ## Manual install
 
@@ -47,11 +48,11 @@ uv tool install simdref
 isa update
 ```
 
-`pip install simdref` also works. Then run `isa update`; then restart the IDE. The server opens the catalog only at start. Instructions: https://github.com/simd-labs/simdref
+`pip install simdref` is also OK. Then run `isa update`. Then start the IDE again. The server opens the catalog only at start. Instructions: https://github.com/simd-labs/simdref
 
 ## Troubleshooting
 
-If `simdref-lsp` is on `PATH`, the plugin uses it. Inlay hints need simdref 0.0.8 or newer (`uv tool upgrade simdref`).
+If `simdref-lsp` is on `PATH`, the plugin uses it. Inlay hints: simdref 0.0.8 or newer (`uv tool upgrade simdref`).
 
 ## Development install
 
@@ -63,12 +64,9 @@ In the IDE, open Settings > Plugins > gear icon > Install Plugin from Disk. Sele
 
 Other tasks: `./gradlew test`, `./gradlew verifyPlugin`, `./gradlew runIde`.
 
-## Headless run in containers
+## Headless containers
 
-CLion does not survive a plain rootless container here (SIGSEGV right after the Data Sharing
-dialog, backend then dies). The same holds for the IU bundle and the free IDEA build. Use the
-host IDE or a VM for end-to-end validation; the plugin is verified against CLion and IDEA
-with `./gradlew verifyPlugin`.
+CLion dies in a plain rootless container here (SIGSEGV right after the Data Sharing dialog, backend then dies). The IU bundle and the free IDEA release die the same. Use the host IDE or a VM for end-to-end checks. The `./gradlew verifyPlugin` task checks the plugin against CLion and IDEA.
 
 ## License
 

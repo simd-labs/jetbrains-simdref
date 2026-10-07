@@ -92,6 +92,30 @@ class ServerInstallerTest {
         assertTrue("too slow: ${elapsedMs}ms", elapsedMs < 4_000)
     }
 
+    /**
+     * Builds a zip with one flat `uv.exe` entry, the shape of the Windows uv
+     * release, and extracts it through the installer's zip branch.
+     * Asserts the bytes survive at the target root, no prefix strip.
+     * Mutation check: break the zip branch and this test FAILS.
+     */
+    @Test
+    fun extractArchiveExtractsFlatZip() {
+        val tmp = Files.createTempDirectory("simdref-zip")
+        val zip = tmp.resolve("uv.zip")
+        val payload = "MZ fake uv\r\n".toByteArray()
+        java.util.zip.ZipOutputStream(Files.newOutputStream(zip)).use { z ->
+            z.putNextEntry(java.util.zip.ZipEntry("uv.exe"))
+            z.write(payload)
+            z.closeEntry()
+        }
+        val out = tmp.resolve("out")
+        Files.createDirectories(out)
+        ServerInstaller.extractArchive(zip, out, null)
+        val f = out.resolve("uv.exe")
+        assertTrue("extracted uv.exe missing", Files.exists(f))
+        assertTrue("bytes differ", Files.readAllBytes(f).contentEquals(payload))
+    }
+
     /** Minimal ustar writer: one regular file with the given mode. */
     private fun buildTar(prefix: String, fileName: String, mode: Int, data: ByteArray): ByteArray {
         val buf = java.io.ByteArrayOutputStream()

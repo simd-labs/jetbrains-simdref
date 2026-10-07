@@ -45,6 +45,10 @@ isa update
 
 `pip install simdref` also works. Then run `isa update`; then restart the IDE. The server opens the catalog only at start. Instructions: https://github.com/simd-labs/simdref
 
+## Troubleshooting
+
+If `simdref-lsp` is on `PATH`, the plugin uses it. Inlay hints need simdref 0.0.8 or newer (`uv tool upgrade simdref`).
+
 ## Development install
 
 ```

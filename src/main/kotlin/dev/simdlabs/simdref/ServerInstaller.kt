@@ -24,6 +24,7 @@ import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 
 const val DOCS_URL = "https://github.com/simd-labs/simdref"
+const val UV_TAG = "0.12.23"
 const val NOT_FOUND_MESSAGE =
     "simdref not found. Install it: uv tool install simdref (or pip install simdref), then run isa update. Instructions: $DOCS_URL"
 
@@ -99,6 +100,8 @@ object ServerInstaller {
             }
 
             override fun onSuccess() {
+                // ponytail: replacement API starts in 2026.2; migrate when 2026.1 support ends
+                @Suppress("DEPRECATION")
                 LspServerManager.getInstance(project).stopAndRestartIfNeeded(SimdrefLspServerSupportProvider::class.java)
             }
 
@@ -133,7 +136,7 @@ object ServerInstaller {
             else -> "$arch-unknown-linux-gnu"
         }
         val suffix = if (SystemInfo.isWindows) "zip" else "tar.gz"
-        val base = "https://github.com/astral-sh/uv/releases/latest/download/uv-$triple.$suffix"
+        val base = "https://github.com/astral-sh/uv/releases/download/$UV_TAG/uv-$triple.$suffix"
         val archive = dir.resolve("uv.$suffix")
         val part = dir.resolve("uv.$suffix.part")
         try {

@@ -10,6 +10,8 @@ val SUPPORTED_EXTENSIONS = setOf("s", "S", "asm", "c", "cc", "cpp", "cxx", "c++"
 
 fun isSupportedExtension(ext: String?): Boolean = ext in SUPPORTED_EXTENSIONS
 
+// ponytail: replacement API starts in 2026.2; migrate when 2026.1 support ends
+@Suppress("DEPRECATION")
 class SimdrefLspServerSupportProvider : LspServerSupportProvider {
     override fun fileOpened(project: Project, file: VirtualFile, serverStarter: LspServerSupportProvider.LspServerStarter) {
         if (!isSupportedExtension(file.extension)) return
@@ -18,6 +20,8 @@ class SimdrefLspServerSupportProvider : LspServerSupportProvider {
     }
 }
 
+// ponytail: replacement API starts in 2026.2; migrate when 2026.1 support ends
+@Suppress("DEPRECATION")
 class SimdrefLspServerDescriptor(project: Project, private val bin: String) :
     ProjectWideLspServerDescriptor(project, "simdref") {
     override fun isSupportedFile(file: VirtualFile) = isSupportedExtension(file.extension)

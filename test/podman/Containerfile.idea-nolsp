@@ -1,0 +1,11 @@
+FROM localhost/jb-simdref-dev:latest
+ENV DEBIAN_FRONTEND=noninteractive JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+# IntelliJ IDEA 2026.1 (unified build, free tier). No simdref or simdref-lsp inside,
+# so the plugin has to install the server itself.
+RUN cd /opt \
+    && curl -fsSL -o idea.tar.gz "https://download.jetbrains.com/idea/idea-2026.1.tar.gz" \
+    && mkdir -p /ide \
+    && tar -xzf idea.tar.gz -C /ide --strip-components=1 \
+    && rm idea.tar.gz \
+    && test -f /ide/bin/idea.sh
+CMD ["/bin/bash"]

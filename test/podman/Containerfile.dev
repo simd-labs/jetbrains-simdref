@@ -1,0 +1,13 @@
+FROM docker.io/library/ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-21-jdk-headless ca-certificates curl unzip git python3 python3-venv \
+    xvfb xauth x11-utils xdotool imagemagick weston grim wtype wl-clipboard xwayland \
+    mesa-vulkan-drivers libvulkan1 libgl1 libgl1-mesa-dri \
+    libx11-6 libxext6 libxrender1 libxtst6 libxi6 libxrandr2 libxcursor1 libxfixes3 libxinerama1 \
+    libxkbcommon0 libxkbcommon-x11-0 libfreetype6 fontconfig fonts-dejavu-core libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libxss1 \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://services.gradle.org/distributions/gradle-9.0.0-bin.zip -o /tmp/g.zip \
+    && unzip -q /tmp/g.zip -d /opt && ln -s /opt/gradle-9.0.0/bin/gradle /usr/local/bin/gradle && rm /tmp/g.zip
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+RUN useradd -m -s /bin/bash u

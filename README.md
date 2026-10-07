@@ -14,7 +14,7 @@ The plugin uses the native JetBrains LSP API (`com.intellij.modules.lsp`). It ne
 
 IntelliJ IDEA Community builds and Android Studio do not have the LSP API.
 
-Inlay hints need a `simdref` version with `textDocument/inlayHint` support. Release 0.0.7 does not have it.
+Inlay hints need simdref 0.0.8 or newer. Release 0.0.7 does not have `textDocument/inlayHint` support.
 
 ## Automatic install
 

@@ -168,8 +168,10 @@ object ServerInstaller {
                 val before = runOutput(listOf(isa, "--version"), env)
                 run(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
                 if (versionChanged(before, runOutput(listOf(isa, "--version"), env))) {
-                    // ensure_runtime re-downloads the catalog only on a version change.
-                    run(listOf(isa, "search", "__version_probe__"), env)
+                    // A probe lookup triggers ensure_runtime, which re-downloads the catalog
+                    // only on a version change. The probe matches nothing and exits 2; the
+                    // exit code is not the signal, ensure_runtime running is.
+                    runOutput(listOf(isa, "search", "__version_probe__"), env)
                     restartOnEdt(project)
                 }
             }

@@ -167,7 +167,7 @@ object ServerInstaller {
                 val isa = binDir().resolve("isa$exe").toString()
                 val before = runOutput(listOf(isa, "--version"), env)
                 run(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
-                if (runOutput(listOf(isa, "--version"), env) != before) {
+                if (versionChanged(before, runOutput(listOf(isa, "--version"), env))) {
                     // ensure_runtime re-downloads the catalog only on a version change.
                     run(listOf(isa, "search", "__version_probe__"), env)
                     restartOnEdt(project)
@@ -183,6 +183,9 @@ object ServerInstaller {
             }
         }.queue()
     }
+
+    /** True when the --version output changed across an upgrade. */
+    fun versionChanged(before: String, after: String): Boolean = before != after
 
     private fun restartOnEdt(project: Project) {
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {

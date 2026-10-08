@@ -39,6 +39,17 @@ class ServerInstallerTest {
         val pathInstall = "/usr/local/bin/simdref-lsp"
         assertFalse(pathInstall.startsWith(prefix))
     }
+
+    /**
+     * The catalog refresh and server restart run only when isa --version
+     * changed across the upgrade. Same version means no refresh and no
+     * 253 MB download. Drives the real compare used in the background task.
+     */
+    @Test
+    fun versionChangeGatesRefresh() {
+        assertFalse("same version must skip refresh", ServerInstaller.versionChanged("0.3.1", "0.3.1"))
+        assertTrue("changed version must refresh", ServerInstaller.versionChanged("0.3.1", "0.3.2"))
+    }
     @Test
     fun uvEnvKeepsAllWritesUnderDir() {
         val dir = Path.of("/tmp/simdref-x")

@@ -18,6 +18,7 @@ class SimdrefLspServerSupportProvider : LspServerSupportProvider {
     override fun fileOpened(project: Project, file: VirtualFile, serverStarter: LspServerSupportProvider.LspServerStarter) {
         if (!isSupportedExtension(file.extension)) return
         val bin = ServerInstaller.find() ?: run { ServerInstaller.installInBackground(project); return }
+        if (bin.startsWith(ServerInstaller.privateBinPrefix())) ServerInstaller.maybeUpgradeInBackground(project)
         serverStarter.ensureServerStarted(SimdrefLspServerDescriptor(project, bin))
     }
 }

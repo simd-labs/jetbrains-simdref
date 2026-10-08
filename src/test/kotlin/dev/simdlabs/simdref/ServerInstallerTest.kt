@@ -11,6 +11,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServerInstallerTest {
+    /**
+     * Drives the real throttle decision through ServerInstaller.stampIsStale.
+     * A missing stamp or one at least 24 h old means upgrade; a fresh stamp
+     * means skip. Mutation check: drop the interval comparison and the
+     * "fresh stamp" assertions FAIL.
+     */
+    @Test
+    fun stampThrottle() {
+        val t0 = 1_700_000_000_000L
+        assertTrue("missing stamp must upgrade", ServerInstaller.stampIsStale(null, t0))
+        assertTrue("old stamp must upgrade", ServerInstaller.stampIsStale(t0 - ServerInstaller.UPDATE_CHECK_INTERVAL_MS, t0))
+        assertFalse("fresh stamp must skip", ServerInstaller.stampIsStale(t0 - 1_000, t0))
+        assertFalse("same-moment stamp must skip", ServerInstaller.stampIsStale(t0, t0))
+    }
+
+    /**
+     * Rule (a): the upgrade applies only to the plugin-managed copy. The guard
+     * is the privateBinPrefix match in Provider; a PATH install never starts
+     * with it. Version compare and catalog refresh guarded by the same flow.
+     */
+    @Test
+    fun privateBinPrefixIsInsideSystemDir() {
+        val prefix = ServerInstaller.privateBinPrefix()
+        assertTrue(prefix.replace('\\', '/').endsWith("/simdref/bin/"))
+        // A PATH entry is a bare dir, never under the private bin prefix.
+        val pathInstall = "/usr/local/bin/simdref-lsp"
+        assertFalse(pathInstall.startsWith(prefix))
+    }
     @Test
     fun uvEnvKeepsAllWritesUnderDir() {
         val dir = Path.of("/tmp/simdref-x")

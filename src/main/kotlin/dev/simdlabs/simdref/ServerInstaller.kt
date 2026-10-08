@@ -21,6 +21,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.security.MessageDigest
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 const val DOCS_URL = "https://github.com/simd-labs/simdref"
@@ -66,10 +67,16 @@ fun fetchUrlText(url: URL, timeoutMillis: Int): String =
 
 object ServerInstaller {
     private val running = AtomicBoolean(false)
+    private val upgrading = AtomicBoolean(false)
     private val exe = if (SystemInfo.isWindows) ".exe" else ""
 
     private fun home(): Path = Path.of(PathManager.getSystemPath(), "simdref")
     private fun binDir(): Path = home().resolve("bin")
+
+    private val log = com.intellij.openapi.diagnostic.Logger.getInstance(ServerInstaller::class.java)
+
+    /** The prefix that marks the plugin-managed simdref-lsp (rule (a): never upgrade a PATH install). */
+    fun privateBinPrefix(): String = binDir().toString() + File.separator
 
     /** All uv writes stay inside [dir]. */
     fun uvEnv(dir: Path): Map<String, String> = mapOf(
@@ -122,6 +129,76 @@ object ServerInstaller {
         indicator.text = "Running isa update"
         run(listOf(binDir().resolve("isa$exe").toString(), "update"), env)
         if (find() == null) error("simdref-lsp is missing in ${binDir()} after install")
+    }
+
+    const val UPDATE_CHECK_INTERVAL_MS: Long = 24 * 60 * 60 * 1000
+
+    /** True when [stamp] is missing or its age (now minus stamp) passes the interval. */
+    fun stampIsStale(lastCheckMillis: Long?, nowMillis: Long): Boolean =
+        lastCheckMillis == null || nowMillis - lastCheckMillis >= UPDATE_CHECK_INTERVAL_MS
+
+    /**
+     * Upgrades the plugin-managed simdref copy at most once every 24 h. The
+     * stamp is written before the upgrade, so an offline day retries tomorrow,
+     * not on every file open. A PATH install is never touched. A version change
+     * makes isa refresh the catalog once (see simdref cli.py ensure_runtime);
+     * an unchanged version downloads nothing.
+     */
+    fun maybeUpgradeInBackground(project: Project, stamp: Path = home().resolve("last-update-check")) {
+        if (!Files.isExecutable(binDir().resolve("simdref-lsp$exe"))) return
+        val fresh = try {
+            Files.exists(stamp) && !stampIsStale(Files.getLastModifiedTime(stamp).toMillis(), System.currentTimeMillis())
+        } catch (e: Exception) {
+            log.warn("simdref auto-update check failed", e)
+            return
+        }
+        if (fresh) return
+        try {
+            Files.writeString(stamp, Instant.now().toString())
+        } catch (e: Exception) {
+            log.warn("simdref auto-update stamp failed", e)
+            return
+        }
+        if (!upgrading.compareAndSet(false, true)) return
+        object : Task.Backgroundable(project, "Upgrading simdref", false) {
+            override fun run(indicator: ProgressIndicator) {
+                val dir = home()
+                val env = uvEnv(dir)
+                val isa = binDir().resolve("isa$exe").toString()
+                val before = runOutput(listOf(isa, "--version"), env)
+                run(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
+                if (runOutput(listOf(isa, "--version"), env) != before) {
+                    // ensure_runtime re-downloads the catalog only on a version change.
+                    run(listOf(isa, "search", "__version_probe__"), env)
+                    restartOnEdt(project)
+                }
+            }
+
+            override fun onThrowable(error: Throwable) {
+                log.warn("simdref auto-update failed", error)
+            }
+
+            override fun onFinished() {
+                upgrading.set(false)
+            }
+        }.queue()
+    }
+
+    private fun restartOnEdt(project: Project) {
+        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+            // ponytail: replacement API starts in 2026.2; migrate when 2026.1 support ends
+            @Suppress("DEPRECATION")
+            LspServerManager.getInstance(project).stopAndRestartIfNeeded(SimdrefLspServerSupportProvider::class.java)
+        }
+    }
+
+    private fun runOutput(cmd: List<String>, env: Map<String, String>): String {
+        val pb = ProcessBuilder(cmd).redirectErrorStream(true)
+        pb.environment().putAll(env)
+        val p = pb.start()
+        val out = p.inputStream.bufferedReader().readText()
+        p.waitFor()
+        return out
     }
 
     private fun downloadUv(dir: Path): Path = downloadUv(dir, 30_000)

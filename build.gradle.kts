@@ -11,6 +11,12 @@ repositories {
     intellijPlatform { defaultRepositories() }
 }
 
+// Publishing prep: all four credentials come from the environment, never the repo.
+val publishToken = providers.environmentVariable("PUBLISH_TOKEN")
+val certificateChain = providers.environmentVariable("CERTIFICATE_CHAIN")
+val privateKey = providers.environmentVariable("PRIVATE_KEY")
+val privateKeyPassword = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+
 dependencies {
     intellijPlatform {
         clion("2026.1")
@@ -27,6 +33,17 @@ intellijPlatform {
             sinceBuild = "261"
             untilBuild = "262.*"
         }
+        vendor {
+            url = "https://github.com/simd-labs"
+        }
+    }
+    signing {
+        this.certificateChain = certificateChain.orNull
+        this.privateKey = privateKey.orNull
+        password = privateKeyPassword.orNull
+    }
+    publishing {
+        token = publishToken.orNull
     }
     pluginVerification {
         ides {

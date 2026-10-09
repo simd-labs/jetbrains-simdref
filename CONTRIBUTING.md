@@ -6,7 +6,9 @@ The plugin stays off JetBrains Marketplace until the owner publishes it. These s
 
 1. Create a JetBrains Marketplace account at https://plugins.jetbrains.com. Sign in with the same JetBrains account you use in the IDE.
 
-2. Upload the first version by hand. The Marketplace still requires this. The first upload creates the vendor profile and accepts the Developer Agreement. Follow https://plugins.jetbrains.com/docs/marketplace/uploading-a-new-plugin.html. Upload `build/distributions/simdref-<version>.zip` (from `./gradlew buildPlugin`).
+2. Upload the first version by hand. The Marketplace still requires this. The first upload is release 0.1.0. It creates the vendor profile and accepts the Developer Agreement. Follow https://plugins.jetbrains.com/docs/marketplace/uploading-a-new-plugin.html. Upload `build/distributions/simdref-<version>.zip` (from `./gradlew buildPlugin`).
+
+   Every later release goes through the tag in step 6, and publishing an existing version fails. Set the new `version` in `build.gradle.kts` and commit before the tag.
 
 3. Create a permanent Marketplace token. Go to My Tokens in the Marketplace profile (see https://plugins.jetbrains.com/docs/marketplace/plugin-upload.html). Copy the `perm:...` value.
 

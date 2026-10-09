@@ -135,25 +135,34 @@ object ServerInstaller {
     }
 
     const val UPDATE_CHECK_INTERVAL_MS: Long = 24 * 60 * 60 * 1000
+    const val LOCK_MAX_AGE_MS: Long = 30 * 60 * 1000
+    const val PROCESS_TIMEOUT_MS: Long = 10 * 60 * 1000
 
     /** True when [stamp] is missing or its age (now minus stamp) passes the interval. */
     fun stampIsStale(lastCheckMillis: Long?, nowMillis: Long): Boolean =
         lastCheckMillis == null || nowMillis - lastCheckMillis >= UPDATE_CHECK_INTERVAL_MS
 
+    /** Milliseconds since epoch, or null when the metadata is unreadable. */
+    fun fileAgeMillis(file: Path): Long? = try {
+        Files.getLastModifiedTime(file).toMillis()
+    } catch (_: Exception) {
+        null
+    }
+
     /**
      * Upgrades the plugin-managed simdref copy once a day, in the background.
-     * The stamp is written inside [upgradeOnce] before the upgrade, so an
-     * offline day retries tomorrow, not on every file open. A PATH install is
-     * never touched: Provider calls this only for a managed binary. A version
-     * change makes isa refresh the catalog once (see simdref cli.py
-     * ensure_runtime); an unchanged version downloads nothing.
+     * On a version change the simdref server restarts in every open project,
+     * because all projects share the one managed copy. A PATH install is never
+     * touched: Provider calls this only for a managed binary.
      */
     fun maybeUpgradeInBackground(project: Project) {
         if (!Files.isExecutable(binDir().resolve("simdref-lsp$exe"))) return
         if (!upgrading.compareAndSet(false, true)) return
         object : Task.Backgroundable(project, "Upgrading simdref", false) {
             override fun run(indicator: ProgressIndicator) {
-                if (upgradeOnce()) restartOnEdt(project)
+                // All open projects share the one install, so each restarts.
+                if (!upgradeOnce()) return
+                for (p in com.intellij.openapi.project.ProjectManager.getInstance().openProjects) restartOnEdt(p)
             }
 
             override fun onThrowable(error: Throwable) {
@@ -167,41 +176,64 @@ object ServerInstaller {
     }
 
     /**
-     * The synchronous auto-update body: stamp freshness, upgrade, version
-     * compare, catalog refresh. Runs nothing when the stamp is fresh. Returns
-     * true only when the version changed, so the caller restarts the server.
+     * The synchronous auto-update body. Two IDE processes can upgrade the one
+     * shared copy at the same time, so the update.lock file gates every
+     * process: a fresh lock means skip, a lock older than [LOCK_MAX_AGE_MS]
+     * is a leftover and is taken over. Inside the lock, the 24 h stamp is
+     * written before the upgrade, so an offline day retries tomorrow, not on
+     * every file open. The upgrade always runs `isa vaddps --short` once:
+     * the refresh costs 0.4 s and downloads nothing when simdref is current,
+     * so the version comparison only gates the restart. Returns true only
+     * when the version changed, so the caller restarts the server.
      */
     internal fun upgradeOnce(): Boolean {
-        val stamp = home().resolve("last-update-check")
-        val fresh = try {
-            Files.exists(stamp) && !stampIsStale(Files.getLastModifiedTime(stamp).toMillis(), System.currentTimeMillis())
-        } catch (e: Exception) {
-            log.warn("simdref auto-update check failed", e)
-            return false
-        }
-        if (fresh) return false
+        val lock = home().resolve("update.lock")
         try {
-            Files.writeString(stamp, Instant.now().toString())
+            Files.write(lock, byteArrayOf(), java.nio.file.StandardOpenOption.CREATE_NEW)
+        } catch (e: java.nio.file.FileAlreadyExistsException) {
+            val age = fileAgeMillis(lock)
+            if (age != null && System.currentTimeMillis() - age < LOCK_MAX_AGE_MS) return false
+            try {
+                Files.delete(lock)
+                Files.write(lock, byteArrayOf(), java.nio.file.StandardOpenOption.CREATE_NEW)
+            } catch (e2: Exception) {
+                log.warn("simdref auto-update lock takeover failed", e2)
+                return false
+            }
         } catch (e: Exception) {
-            log.warn("simdref auto-update stamp failed", e)
+            log.warn("simdref auto-update lock failed", e)
             return false
         }
-        val dir = home()
-        val env = uvEnv(dir)
-        val isa = binDir().resolve("isa$exe").toString()
-        val before = runOutput(listOf(isa, "--version"), env)
-        run(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
-        val after = runOutput(listOf(isa, "--version"), env)
-        // A failed probe after the upgrade means no refresh and no restart.
-        if (after.isEmpty() || !versionChanged(before, after)) return false
-        // A lookup triggers ensure_runtime, which re-downloads the catalog
-        // only on a version change. `isa vaddps --short` exits 0.
-        runOutput(listOf(isa, "vaddps", "--short"), env)
-        return true
+        try {
+            val stamp = home().resolve("last-update-check")
+            val stampAge = if (Files.exists(stamp)) fileAgeMillis(stamp) else null
+            if (!stampIsStale(stampAge, System.currentTimeMillis())) return false
+            try {
+                Files.writeString(stamp, Instant.now().toString())
+            } catch (e: Exception) {
+                log.warn("simdref auto-update stamp failed", e)
+                return false
+            }
+            val dir = home()
+            val env = uvEnv(dir)
+            val isa = binDir().resolve("isa$exe").toString()
+            val before = runOutput(listOf(isa, "--version"), env)
+            val upgrade = runLogged(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
+            if (upgrade.isNotEmpty()) log.warn("simdref auto-update upgrade failed: ${upgrade.takeLast(500)}")
+            // A nonzero refresh is logged, not hidden: it also appears in the idea log.
+            val refresh = runLogged(listOf(isa, "vaddps", "--short"), env)
+            if (refresh.isNotEmpty()) log.warn("simdref auto-update refresh failed: ${refresh.takeLast(500)}")
+            val after = runOutput(listOf(isa, "--version"), env)
+            // Restart only when the after-version is readable and differs.
+            return after.isNotEmpty() && after != before
+        } finally {
+            try {
+                Files.deleteIfExists(lock)
+            } catch (e: Exception) {
+                log.warn("simdref auto-update lock cleanup failed", e)
+            }
+        }
     }
-
-    /** True when the --version output changed across an upgrade. */
-    fun versionChanged(before: String, after: String): Boolean = before != after
 
     private fun restartOnEdt(project: Project) {
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
@@ -211,14 +243,46 @@ object ServerInstaller {
         }
     }
 
-    /** Empty output on a non-zero exit, so a failed probe never counts as a version. */
-    private fun runOutput(cmd: List<String>, env: Map<String, String>): String {
+    /** Empty output on a non-zero exit or timeout, so a failed probe never counts as a version. */
+    private fun runOutput(cmd: List<String>, env: Map<String, String>): String =
+        runLogged(cmd, env, "")
+
+    /**
+     * Runs [cmd] with a [PROCESS_TIMEOUT_MS] limit; a timeout destroys the
+     * process. Returns the merged output on exit 0, the output (or a marker)
+     * otherwise, so the caller logs it. [failureOutput] replaces the failure
+     * marker for the caller that wants the empty-on-failure probe shape.
+     */
+    private fun runLogged(cmd: List<String>, env: Map<String, String>, failureOutput: String? = null): String {
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
         pb.environment().putAll(env)
-        val p = pb.start()
-        val out = p.inputStream.bufferedReader().readText()
-        if (p.waitFor() != 0) return ""
-        return out
+        val p = try {
+            pb.start()
+        } catch (e: Exception) {
+            log.warn("simdref auto-update process failed to start: ${cmd.take(2).joinToString(" ")}", e)
+            return failureOutput ?: "start failed: ${e.message}"
+        }
+        // Read the output on a daemon thread: a stalled writer must not block
+        // the timeout below, and a dead child must not leave a full pipe.
+        var out = ""
+        val reader = Thread {
+            out = try {
+                p.inputStream.bufferedReader().readText()
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        reader.isDaemon = true
+        reader.start()
+        val done = p.waitFor(PROCESS_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        if (!done) {
+            p.destroyForcibly()
+            reader.join(5_000)
+            return failureOutput ?: "timeout after ${PROCESS_TIMEOUT_MS} ms"
+        }
+        reader.join(5_000)
+        if (p.exitValue() == 0) return if (failureOutput == null) "" else out
+        return failureOutput ?: out
     }
 
     private fun downloadUv(dir: Path): Path = downloadUv(dir, 30_000)

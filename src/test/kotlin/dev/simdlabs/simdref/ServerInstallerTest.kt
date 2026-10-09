@@ -111,6 +111,24 @@ class ServerInstallerTest {
         assertFalse("the child must be dead before the check", Files.exists(marker))
     }
 
+    /**
+     * A fake uv that exits 1 with no output still reports the failure:
+     * runLogged returns a non-empty marker, so upgradeOnce logs a warn
+     * instead of swallowing the nonzero exit (callers at :192/:195 warn
+     * only on a non-empty result). Mutation: revert the `ifEmpty` line in
+     * runLogged and this test FAILS. Windows skip: POSIX sh only.
+     */
+    @Test(timeout = 20_000)
+    fun silentNonzeroExitIsReported() {
+        assumeWindowsSkip()
+        val dir = Files.createTempDirectory("simdref-silent")
+        val script = dir.resolve("uv")
+        Files.writeString(script, "#!/bin/sh\nexit 1\n")
+        script.toFile().setExecutable(true)
+        val out = ServerInstaller.runLogged(listOf(script.toString(), "tool", "upgrade", "simdref"), emptyMap())
+        assertTrue("a silent nonzero exit returns a non-empty marker: '$out'", out.contains("exit 1"))
+    }
+
     private fun assumeWindowsSkip() {
         org.junit.Assume.assumeFalse("POSIX sh only", com.intellij.openapi.util.SystemInfo.isWindows)
     }

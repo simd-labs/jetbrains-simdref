@@ -291,7 +291,7 @@ object ServerInstaller {
         }
         if (!done) return failureOutput ?: "timeout after $timeoutMs ms"
         if (p.exitValue() == 0) return if (failureOutput == null) "" else out
-        return failureOutput ?: out
+        return failureOutput ?: out.ifEmpty { "exit ${p.exitValue()}" }
     }
 
     /** Drops bytes from the head so the buffer keeps at most [OUTPUT_CAP]. */

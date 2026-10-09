@@ -15,7 +15,7 @@ import org.junit.Test
  * Drives the real ServerInstaller.upgradeOnce with fake uv and isa scripts
  * that log every argv. The system path is swapped through the PathManager
  * field, so home() points at a temp dir. No copy of the production logic
- * lives here: the test only stamps, locks, calls, and reads the argv log.
+ * lives here: the test only plants markers, calls, and reads the argv log.
  */
 class UpgradeOrchestrationTest {
     private fun writeScript(path: Path, body: String) {
@@ -39,6 +39,8 @@ class UpgradeOrchestrationTest {
         f.set(null, old)
     }
 
+    private fun today(): Long = System.currentTimeMillis() / 86_400_000L
+
     /**
      * Builds a fake plugin home and runs the real upgradeOnce.
      * [versionAfterUpgrade] is what the fake isa prints after uv runs;
@@ -46,18 +48,16 @@ class UpgradeOrchestrationTest {
      * unreadable-after-upgrade case; uv still bumps the version file.
      * [failRefresh] makes `isa vaddps --short` exit 1. [failUpgrade] makes
      * the fake uv exit 1 without changing the version file.
-     * [stampAgeMillis] null writes no stamp; otherwise sets the stamp mtime
-     * that far in the past. [lockAgeMillis] null writes no lock; otherwise
-     * plants update.lock with that mtime before the call. Returns the
-     * upgradeOnce result, the argv log, and the leftover lock flag.
+     * [markerOffsetDays] 0 plants today's marker, a negative value plants a
+     * past day's, null plants none. Returns the upgradeOnce result, the argv
+     * log, and the marker names left in the home dir.
      */
     private fun runScenario(
         versionAfterUpgrade: String?,
-        stampAgeMillis: Long?,
+        markerOffsetDays: Long?,
         failRefresh: Boolean = false,
         failUpgrade: Boolean = false,
-        lockAgeMillis: Long? = null,
-    ): Triple<Boolean, List<String>, Boolean> {
+    ): Triple<Boolean, List<String>, List<String>> {
         val dir = Files.createTempDirectory("simdref-orch")
         val home = dir.resolve("home/simdref")
         val bin = home.resolve("bin")
@@ -94,15 +94,8 @@ exit 0
             "#!/bin/sh\necho \"uv \$@\" >> \"$log\"\n$uvBody\n"
         )
         Files.writeString(dir.resolve("version.txt"), "0.3.1\n")
-        if (stampAgeMillis != null) {
-            val stamp = home.resolve("last-update-check")
-            Files.writeString(stamp, "stamp\n")
-            assertTrue("stamp mtime set", stamp.toFile().setLastModified(System.currentTimeMillis() - stampAgeMillis))
-        }
-        if (lockAgeMillis != null) {
-            val lock = home.resolve("update.lock")
-            Files.write(lock, byteArrayOf())
-            assertTrue("lock mtime set", lock.toFile().setLastModified(System.currentTimeMillis() - lockAgeMillis))
+        if (markerOffsetDays != null) {
+            Files.createFile(home.resolve("update-" + (today() + markerOffsetDays)))
         }
         val old = swapSystemPath(dir.resolve("home"))
         val changed = try {
@@ -110,29 +103,25 @@ exit 0
         } finally {
             restoreSystemPath(old)
         }
-        return Triple(changed, Files.readAllLines(log), Files.exists(home.resolve("update.lock")))
+        val markers = Files.newDirectoryStream(home, "update-*").use { s -> s.map { it.fileName.toString() } }
+        return Triple(changed, Files.readAllLines(log), markers)
     }
 
     @Test
-    fun staleStampRunsUpgradeThenRefresh() {
+    fun todaysMarkerRunsNothing() {
         assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
-        val (_, lines, _) = runScenario("0.3.2", ServerInstaller.UPDATE_CHECK_INTERVAL_MS + 1_000)
-        assertTrue("upgrade must run on a stale stamp: $lines", lines.any { it == "uv tool upgrade simdref" })
-        assertEquals("one refresh after the upgrade: $lines", 1, lines.count { it == "isa vaddps --short" })
+        val (changed, lines, _) = runScenario("0.3.2", 0)
+        assertEquals("today's marker runs nothing: $lines", emptyList<String>(), lines)
+        assertFalse(changed)
     }
 
     @Test
-    fun missingStampRunsUpgrade() {
+    fun noMarkerRunsAndCleansOldMarkers() {
         assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
-        val (_, lines, _) = runScenario("0.3.2", null)
-        assertTrue("upgrade must run without a stamp: $lines", lines.any { it == "uv tool upgrade simdref" })
-    }
-
-    @Test
-    fun freshStampRunsNothing() {
-        assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
-        val (_, lines, _) = runScenario("0.3.2", 1_000)
-        assertEquals("a fresh stamp runs nothing: $lines", emptyList<String>(), lines)
+        val (_, lines, markers) = runScenario("0.3.2", -1)
+        assertTrue("no marker of today runs the upgrade: $lines", lines.any { it == "uv tool upgrade simdref" })
+        assertTrue("today's marker exists: $markers", markers.contains("update-" + today()))
+        assertFalse("yesterday's marker is removed: $markers", markers.contains("update-" + (today() - 1)))
     }
 
     @Test
@@ -157,31 +146,6 @@ exit 0
         assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
         val (changed, _, _) = runScenario(null, null)
         assertFalse("no restart on an unreadable version", changed)
-    }
-
-    @Test
-    fun freshLockRunsNothing() {
-        assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
-        val (changed, lines, lockLeft) = runScenario("0.3.2", null, lockAgeMillis = 1_000)
-        assertEquals("a fresh lock runs nothing: $lines", emptyList<String>(), lines)
-        assertFalse(changed)
-        assertTrue("the fresh lock is not ours; it stays", lockLeft)
-    }
-
-    @Test
-    fun staleLockIsTakenOver() {
-        assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
-        val (_, lines, lockLeft) = runScenario("0.3.2", null, lockAgeMillis = ServerInstaller.LOCK_MAX_AGE_MS + 1_000)
-        assertTrue("a stale lock is taken over and the upgrade runs: $lines", lines.any { it == "uv tool upgrade simdref" })
-        assertFalse("the taken lock is removed at the end", lockLeft)
-    }
-
-    @Test
-    fun lockRemovedAfterAFailure() {
-        assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
-        val (changed, _, lockLeft) = runScenario(null, null, failRefresh = true)
-        assertFalse(changed)
-        assertFalse("the lock is removed even when the refresh fails", lockLeft)
     }
 
     @Test

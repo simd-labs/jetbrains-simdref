@@ -21,7 +21,6 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.security.MessageDigest
-import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 const val DOCS_URL = "https://github.com/simd-labs/simdref"
@@ -134,20 +133,8 @@ object ServerInstaller {
         if (find() == null) error("simdref-lsp is missing in ${binDir()} after install")
     }
 
-    const val UPDATE_CHECK_INTERVAL_MS: Long = 24 * 60 * 60 * 1000
-    const val LOCK_MAX_AGE_MS: Long = 30 * 60 * 1000
     const val PROCESS_TIMEOUT_MS: Long = 10 * 60 * 1000
-
-    /** True when [stamp] is missing or its age (now minus stamp) passes the interval. */
-    fun stampIsStale(lastCheckMillis: Long?, nowMillis: Long): Boolean =
-        lastCheckMillis == null || nowMillis - lastCheckMillis >= UPDATE_CHECK_INTERVAL_MS
-
-    /** Milliseconds since epoch, or null when the metadata is unreadable. */
-    fun fileAgeMillis(file: Path): Long? = try {
-        Files.getLastModifiedTime(file).toMillis()
-    } catch (_: Exception) {
-        null
-    }
+    private const val OUTPUT_CAP: Int = 64 * 1024
 
     /**
      * Upgrades the plugin-managed simdref copy once a day, in the background.
@@ -176,45 +163,32 @@ object ServerInstaller {
     }
 
     /**
-     * The synchronous auto-update body. Two IDE processes can upgrade the one
-     * shared copy at the same time, so the update.lock file gates every
-     * process: a fresh lock means skip, a lock older than [LOCK_MAX_AGE_MS]
-     * is a leftover and is taken over. Inside the lock, the 24 h stamp is
-     * written before the upgrade, so an offline day retries tomorrow, not on
-     * every file open. The upgrade always runs `isa vaddps --short` once:
-     * the refresh costs 0.4 s and downloads nothing when simdref is current,
-     * so the version comparison only gates the restart. Returns true only
-     * when the version changed, so the caller restarts the server.
+     * The synchronous auto-update body. Once a day, per UTC day: the
+     * update-<day> marker exists or the whole check is skipped. shortcut: a
+     * check still running at midnight UTC can overlap the next day's check,
+     * add an OS lock if that is ever reported. The upgrade always runs
+     * `isa vaddps --short` once: the refresh costs 0.4 s and downloads
+     * nothing when simdref is current, so the version comparison only gates
+     * the restart. Returns true only when the version changed, so the caller
+     * restarts the server.
      */
     internal fun upgradeOnce(): Boolean {
-        val lock = home().resolve("update.lock")
+        val dir = home()
+        val marker = dir.resolve("update-" + System.currentTimeMillis() / 86_400_000L)
         try {
-            Files.write(lock, byteArrayOf(), java.nio.file.StandardOpenOption.CREATE_NEW)
+            Files.createFile(marker)
         } catch (e: java.nio.file.FileAlreadyExistsException) {
-            val age = fileAgeMillis(lock)
-            if (age != null && System.currentTimeMillis() - age < LOCK_MAX_AGE_MS) return false
-            try {
-                Files.delete(lock)
-                Files.write(lock, byteArrayOf(), java.nio.file.StandardOpenOption.CREATE_NEW)
-            } catch (e2: Exception) {
-                log.warn("simdref auto-update lock takeover failed", e2)
-                return false
-            }
+            return false
         } catch (e: Exception) {
-            log.warn("simdref auto-update lock failed", e)
+            log.warn("simdref auto-update marker failed", e)
             return false
         }
         try {
-            val stamp = home().resolve("last-update-check")
-            val stampAge = if (Files.exists(stamp)) fileAgeMillis(stamp) else null
-            if (!stampIsStale(stampAge, System.currentTimeMillis())) return false
-            try {
-                Files.writeString(stamp, Instant.now().toString())
-            } catch (e: Exception) {
-                log.warn("simdref auto-update stamp failed", e)
-                return false
+            Files.newDirectoryStream(dir, "update-*").use { stream ->
+                for (f in stream) if (f != marker) {
+                    try { Files.deleteIfExists(f) } catch (_: Exception) {}
+                }
             }
-            val dir = home()
             val env = uvEnv(dir)
             val isa = binDir().resolve("isa$exe").toString()
             val before = runOutput(listOf(isa, "--version"), env)
@@ -226,12 +200,9 @@ object ServerInstaller {
             val after = runOutput(listOf(isa, "--version"), env)
             // Restart only when the after-version is readable and differs.
             return after.isNotEmpty() && after != before
-        } finally {
-            try {
-                Files.deleteIfExists(lock)
-            } catch (e: Exception) {
-                log.warn("simdref auto-update lock cleanup failed", e)
-            }
+        } catch (e: Exception) {
+            log.warn("simdref auto-update failed", e)
+            return false
         }
     }
 
@@ -248,12 +219,19 @@ object ServerInstaller {
         runLogged(cmd, env, "")
 
     /**
-     * Runs [cmd] with a [PROCESS_TIMEOUT_MS] limit; a timeout destroys the
-     * process. Returns the merged output on exit 0, the output (or a marker)
-     * otherwise, so the caller logs it. [failureOutput] replaces the failure
-     * marker for the caller that wants the empty-on-failure probe shape.
+     * Runs [cmd] with a [timeoutMs] limit; a timeout kills the process and
+     * its descendants, then waits for exit. Returns the merged output on
+     * exit 0, the output (or a marker) otherwise, so the caller logs it.
+     * [failureOutput] replaces both output and marker for the caller that
+     * wants the empty-on-failure probe shape. Output keeps only the last
+     * [OUTPUT_CAP] bytes; a runaway writer cannot exhaust memory.
      */
-    private fun runLogged(cmd: List<String>, env: Map<String, String>, failureOutput: String? = null): String {
+    internal fun runLogged(
+        cmd: List<String>,
+        env: Map<String, String>,
+        failureOutput: String? = null,
+        timeoutMs: Long = PROCESS_TIMEOUT_MS,
+    ): String {
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
         pb.environment().putAll(env)
         val p = try {
@@ -264,25 +242,52 @@ object ServerInstaller {
         }
         // Read the output on a daemon thread: a stalled writer must not block
         // the timeout below, and a dead child must not leave a full pipe.
-        var out = ""
-        val reader = Thread {
-            out = try {
-                p.inputStream.bufferedReader().readText()
-            } catch (_: Exception) {
-                ""
+        val buf = java.io.ByteArrayOutputStream()
+        var done = false
+        try {
+            val reader = Thread {
+                try {
+                    val input = p.inputStream
+                    val chunk = ByteArray(8192)
+                    while (true) {
+                        val n = input.read(chunk)
+                        if (n < 0) break
+                        synchronized(buf) {
+                            buf.write(chunk, 0, n)
+                            if (buf.size() > OUTPUT_CAP) buf.dropHead()
+                        }
+                    }
+                } catch (_: Exception) {
+                    // the stream closed or the read failed; done either way
+                }
             }
-        }
-        reader.isDaemon = true
-        reader.start()
-        val done = p.waitFor(PROCESS_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-        if (!done) {
-            p.destroyForcibly()
+            reader.isDaemon = true
+            reader.start()
+            done = p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!done) {
+                // Kill the children first, then the process, then wait for the exit.
+                p.toHandle().descendants().forEach { it.destroyForcibly() }
+                p.destroyForcibly()
+                p.waitFor()
+            }
             reader.join(5_000)
-            return failureOutput ?: "timeout after ${PROCESS_TIMEOUT_MS} ms"
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            p.destroyForcibly()
+            return failureOutput ?: "interrupted"
         }
-        reader.join(5_000)
+        val out = synchronized(buf) { buf.toString(Charsets.UTF_8) }
+        if (!done) return failureOutput ?: "timeout after $timeoutMs ms"
         if (p.exitValue() == 0) return if (failureOutput == null) "" else out
         return failureOutput ?: out
+    }
+
+    /** Drops bytes from the head so the buffer keeps at most [OUTPUT_CAP]. */
+    private fun java.io.ByteArrayOutputStream.dropHead() {
+        val keep = size() - OUTPUT_CAP / 2
+        val all = toByteArray()
+        reset()
+        write(all, all.size - keep, keep)
     }
 
     private fun downloadUv(dir: Path): Path = downloadUv(dir, 30_000)

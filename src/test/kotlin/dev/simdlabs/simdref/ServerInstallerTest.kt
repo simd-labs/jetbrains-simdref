@@ -12,21 +12,6 @@ import org.junit.Test
 
 class ServerInstallerTest {
     /**
-     * Drives the real throttle decision through ServerInstaller.stampIsStale.
-     * A missing stamp or one at least a day old means upgrade; a fresh stamp
-     * means skip. Mutation check: drop the interval comparison and the
-     * "fresh stamp" assertions FAIL.
-     */
-    @Test
-    fun stampThrottle() {
-        val t0 = 1_700_000_000_000L
-        assertTrue("missing stamp must upgrade", ServerInstaller.stampIsStale(null, t0))
-        assertTrue("old stamp must upgrade", ServerInstaller.stampIsStale(t0 - ServerInstaller.UPDATE_CHECK_INTERVAL_MS, t0))
-        assertFalse("fresh stamp must skip", ServerInstaller.stampIsStale(t0 - 1_000, t0))
-        assertFalse("same-moment stamp must skip", ServerInstaller.stampIsStale(t0, t0))
-    }
-
-    /**
      * Rule (a): the upgrade applies only to the plugin-managed copy. The guard
      * is the privateBinPrefix match in Provider; a PATH install never starts
      * with it. Version compare and catalog refresh guarded by the same flow.
@@ -63,6 +48,41 @@ class ServerInstallerTest {
     @Test
     fun parseChecksumReadsFirstToken() {
         assertEquals("ba7816bf", parseChecksum("ba7816bf  uv.tar.gz\n"))
+    }
+
+    /**
+     * A command that sleeps past the timeout dies with its child: runLogged
+     * kills the descendants, the process, and waits for the exit. The child
+     * touches a marker after 2 s; the test waits past that before it checks.
+     * Mutation check: drop the descendants kill and `child-alive` makes this FAIL.
+     */
+    @Test(timeout = 20_000)
+    fun timeoutKillsTheWholeTree() {
+        assumeWindowsSkip()
+        val dir = Files.createTempDirectory("simdref-timeout")
+        val marker = dir.resolve("child-alive")
+        val script = dir.resolve("sleeper.sh")
+        Files.writeString(
+            script,
+            "#!/bin/sh\nexport MARKER=\"$1\"\nsh -c 'sleep 2; touch \"${'$'}MARKER\"' &\nsleep 30\n"
+        )
+        script.toFile().setExecutable(true)
+        val start = System.nanoTime()
+        val out = ServerInstaller.runLogged(
+            listOf("sh", script.toString(), marker.toString()),
+            emptyMap(),
+            null,
+            300,
+        )
+        val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
+        assertTrue("a timeout reports it: $out", out.contains("timeout"))
+        assertTrue("waited for the exit, not the 30 s sleep: ${elapsedMs}ms", elapsedMs < 10_000)
+        Thread.sleep(3_000) // past the child's 2 s: a live child has written the marker by now
+        assertFalse("the child must be dead before the check", Files.exists(marker))
+    }
+
+    private fun assumeWindowsSkip() {
+        org.junit.Assume.assumeFalse("POSIX sh only", com.intellij.openapi.util.SystemInfo.isWindows)
     }
 
     /**

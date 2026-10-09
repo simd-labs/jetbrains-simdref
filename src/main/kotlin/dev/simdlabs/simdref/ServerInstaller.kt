@@ -65,8 +65,8 @@ fun fetchUrlText(url: URL, timeoutMillis: Int): String =
     String(fetchUrlBytes(url, timeoutMillis), StandardCharsets.UTF_8)
 
 object ServerInstaller {
-    private val running = AtomicBoolean(false)
-    private val upgrading = AtomicBoolean(false)
+    // One guard for install and upgrade: both write the one managed install.
+    private val busy = AtomicBoolean(false)
     private val exe = if (SystemInfo.isWindows) ".exe" else ""
 
     private fun home(): Path = Path.of(PathManager.getSystemPath(), "simdref")
@@ -98,7 +98,7 @@ object ServerInstaller {
 
     /** 3. Download uv, install simdref, run isa update. 4. Notify on any failure. Retries on the next file open after a failure. */
     fun installInBackground(project: Project) {
-        if (!running.compareAndSet(false, true)) return
+        if (!busy.compareAndSet(false, true)) return
         object : Task.Backgroundable(project, "Installing simdref", false) {
             override fun run(indicator: ProgressIndicator) {
                 try {
@@ -115,7 +115,7 @@ object ServerInstaller {
             }
 
             override fun onFinished() {
-                running.set(false)
+                busy.set(false)
             }
         }.queue()
     }
@@ -144,12 +144,11 @@ object ServerInstaller {
      */
     fun maybeUpgradeInBackground(project: Project) {
         if (!Files.isExecutable(binDir().resolve("simdref-lsp$exe"))) return
-        if (!upgrading.compareAndSet(false, true)) return
+        if (!busy.compareAndSet(false, true)) return
         object : Task.Backgroundable(project, "Upgrading simdref", false) {
             override fun run(indicator: ProgressIndicator) {
-                // All open projects share the one install, so each restarts.
                 if (!upgradeOnce()) return
-                for (p in com.intellij.openapi.project.ProjectManager.getInstance().openProjects) restartOnEdt(p)
+                restartManagedProjects()
             }
 
             override fun onThrowable(error: Throwable) {
@@ -157,10 +156,26 @@ object ServerInstaller {
             }
 
             override fun onFinished() {
-                upgrading.set(false)
+                busy.set(false)
             }
         }.queue()
     }
+
+    /**
+     * Restarts the simdref server in each open project, but only when the
+     * resolved server command is the managed install. A PATH install keeps
+     * its server untouched (rule (a)).
+     */
+    internal fun restartManagedProjects() {
+        if (!upgradeRestartApplies()) return
+        for (p in com.intellij.openapi.project.ProjectManager.getInstance().openProjects) {
+            // All open projects share the one managed install, so each restarts.
+            restartOnEdt(p)
+        }
+    }
+
+    /** True when find() resolves to the managed install. Testable restart gate. */
+    internal fun upgradeRestartApplies(): Boolean = managesBin(find() ?: "")
 
     /**
      * The synchronous auto-update body. Once a day, per UTC day: the
@@ -244,39 +259,49 @@ object ServerInstaller {
         // the timeout below, and a dead child must not leave a full pipe.
         val buf = java.io.ByteArrayOutputStream()
         var done = false
-        try {
-            val reader = Thread {
-                try {
-                    val input = p.inputStream
-                    val chunk = ByteArray(8192)
-                    while (true) {
-                        val n = input.read(chunk)
-                        if (n < 0) break
-                        synchronized(buf) {
-                            buf.write(chunk, 0, n)
-                            if (buf.size() > OUTPUT_CAP) buf.dropHead()
-                        }
+        var interrupted = false
+        val reader = Thread {
+            try {
+                val input = p.inputStream
+                val chunk = ByteArray(8192)
+                while (true) {
+                    val n = input.read(chunk)
+                    if (n < 0) break
+                    synchronized(buf) {
+                        buf.write(chunk, 0, n)
+                        if (buf.size() > OUTPUT_CAP) buf.dropHead()
                     }
-                } catch (_: Exception) {
-                    // the stream closed or the read failed; done either way
                 }
+            } catch (_: Exception) {
+                // the stream closed or the read failed; done either way
             }
-            reader.isDaemon = true
-            reader.start()
+        }
+        reader.isDaemon = true
+        reader.start()
+        try {
             done = p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Keep the flag clear here: reader.join below throws at once on an
+            // interrupted thread. The flag is restored after the finally.
+            interrupted = true
+        } finally {
+            // Timeout, interrupt, and normal exit alike: kill the children,
+            // kill the process when it still lives, wait for the exit, and
+            // join the reader so no thread or process outlives the call.
             if (!done) {
-                // Kill the children first, then the process, then wait for the exit.
                 p.toHandle().descendants().forEach { it.destroyForcibly() }
+            }
+            if (p.isAlive) {
                 p.destroyForcibly()
                 p.waitFor()
             }
             reader.join(5_000)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-            p.destroyForcibly()
-            return failureOutput ?: "interrupted"
         }
         val out = synchronized(buf) { buf.toString(Charsets.UTF_8) }
+        if (interrupted) {
+            Thread.currentThread().interrupt()
+            return failureOutput ?: "interrupted"
+        }
         if (!done) return failureOutput ?: "timeout after $timeoutMs ms"
         if (p.exitValue() == 0) return if (failureOutput == null) "" else out
         return failureOutput ?: out

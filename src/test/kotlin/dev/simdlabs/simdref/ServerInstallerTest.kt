@@ -86,6 +86,47 @@ class ServerInstallerTest {
     }
 
     /**
+     * F1: an interrupt mid-wait must kill the child tree and join the reader,
+     * same as a timeout. The script spawns a child that touches a marker
+     * after 2 s and then sleeps; the test interrupts the runLogged caller,
+     * waits past 2 s, and checks that the child never wrote the marker and
+     * that the caller returned the interrupt shape.
+     * Mutation: revert the catch to the old destroy-only path (no descendant
+     * kill) and `child-alive` makes this test FAIL.
+     */
+    @Test(timeout = 20_000)
+    fun interruptKillsTheWholeTree() {
+        assumeWindowsSkip()
+        val dir = Files.createTempDirectory("simdref-interrupt")
+        val marker = dir.resolve("child-alive")
+        val script = dir.resolve("sleeper.sh")
+        Files.writeString(
+            script,
+            "#!/bin/sh\nexport MARKER=\"$1\"\nsh -c 'sleep 2; touch \"${'$'}MARKER\"' &\nsleep 30\n"
+        )
+        script.toFile().setExecutable(true)
+        val result = java.util.concurrent.atomic.AtomicReference<String>()
+        val caller = Thread {
+            result.set(
+                ServerInstaller.runLogged(
+                    listOf("sh", script.toString(), marker.toString()),
+                    emptyMap(),
+                    "FAILED",
+                    60_000,
+                )
+            )
+        }
+        caller.start()
+        Thread.sleep(500) // in waitFor by now
+        caller.interrupt()
+        caller.join(10_000)
+        assertFalse("runLogged must return promptly after interrupt", caller.isAlive)
+        assertEquals("FAILED", result.get())
+        Thread.sleep(3_000) // past the child's 2 s
+        assertFalse("the child must be dead before the check", Files.exists(marker))
+    }
+
+    /**
      * Extracts a tar.gz built in the test through the same function the installer
      * uses. The tar holds one file with mode 0755 under one top-level directory.
      * Asserts the file exists in the target dir and is executable.

@@ -170,4 +170,37 @@ exit 0
         assertFalse("/usr/local/bin/simdref-lsp should never upgrade", ServerInstaller.managesBin("/usr/local/bin/simdref-lsp"))
         assertTrue(ServerInstaller.managesBin(ServerInstaller.privateBinPrefix() + "simdref-lsp"))
     }
+
+    /**
+     * F2: after an upgrade the restart runs only when find() resolves to the
+     * managed install. The CI PATH has no simdref-lsp, so find() falls back
+     * to the swapped bin dir. Mutation: drop the managesBin gate in
+     * upgradeRestartApplies (return true) and noManagedBinNoRestart FAILS.
+     */
+    @Test
+    fun noManagedBinNoRestart() {
+        val dir = Files.createTempDirectory("simdref-restart")
+        val home = dir.resolve("home/simdref")
+        Files.createDirectories(home.resolve("bin"))
+        val old = swapSystemPath(dir.resolve("home"))
+        try {
+            assertFalse("no managed bin, no restart", ServerInstaller.upgradeRestartApplies())
+        } finally {
+            restoreSystemPath(old)
+        }
+    }
+
+    @Test
+    fun managedBinRestarts() {
+        val dir = Files.createTempDirectory("simdref-restart")
+        val home = dir.resolve("home/simdref")
+        Files.createDirectories(home.resolve("bin"))
+        writeScript(home.resolve("bin/simdref-lsp"), "#!/bin/sh\nexit 0\n")
+        val old = swapSystemPath(dir.resolve("home"))
+        try {
+            assertTrue("the managed bin restarts", ServerInstaller.upgradeRestartApplies())
+        } finally {
+            restoreSystemPath(old)
+        }
+    }
 }

@@ -44,7 +44,8 @@ class UpgradeOrchestrationTest {
      * [versionAfterUpgrade] is what the fake isa prints after uv runs;
      * null makes the fake isa fail on the second `--version` call, the
      * unreadable-after-upgrade case; uv still bumps the version file.
-     * [failRefresh] makes `isa vaddps --short` exit 1.
+     * [failRefresh] makes `isa vaddps --short` exit 1. [failUpgrade] makes
+     * the fake uv exit 1 without changing the version file.
      * [stampAgeMillis] null writes no stamp; otherwise sets the stamp mtime
      * that far in the past. [lockAgeMillis] null writes no lock; otherwise
      * plants update.lock with that mtime before the call. Returns the
@@ -54,6 +55,7 @@ class UpgradeOrchestrationTest {
         versionAfterUpgrade: String?,
         stampAgeMillis: Long?,
         failRefresh: Boolean = false,
+        failUpgrade: Boolean = false,
         lockAgeMillis: Long? = null,
     ): Triple<Boolean, List<String>, Boolean> {
         val dir = Files.createTempDirectory("simdref-orch")
@@ -85,9 +87,11 @@ exit 0
         writeScript(bin.resolve("simdref-lsp"), "#!/bin/sh\nexit 0\n")
         // uv always bumps the version file; the unreadable case uses 0.3.2.
         val bump = "printf '%s\\n' \"${versionAfterUpgrade ?: "0.3.2"}\" > \"${dir}/version.txt\""
+        // A failed upgrade exits 1 and leaves the version file alone.
+        val uvBody = if (failUpgrade) "echo 'uv failed' >&2\nexit 1" else "$bump\nexit 0"
         writeScript(
             home.resolve("uv"),
-            "#!/bin/sh\necho \"uv \$@\" >> \"$log\"\n$bump\nexit 0\n"
+            "#!/bin/sh\necho \"uv \$@\" >> \"$log\"\n$uvBody\n"
         )
         Files.writeString(dir.resolve("version.txt"), "0.3.1\n")
         if (stampAgeMillis != null) {
@@ -186,6 +190,15 @@ exit 0
         val (changed, lines, _) = runScenario("0.3.2", null, failRefresh = true)
         assertTrue("the upgrade still ran: $lines", lines.any { it == "uv tool upgrade simdref" })
         assertTrue("a nonzero refresh is logged only; the version change still restarts", changed)
+    }
+
+    @Test
+    fun failedUpgradeStillRefreshesButNoRestart() {
+        assumeFalse("the fake uv and isa scripts are POSIX sh; no Windows CI exists", SystemInfo.isWindows)
+        val (changed, lines, _) = runScenario("0.3.1", null, failUpgrade = true)
+        assertTrue("the upgrade attempt is logged: $lines", lines.any { it == "uv tool upgrade simdref" })
+        assertEquals("the refresh still runs after a failed upgrade: $lines", 1, lines.count { it == "isa vaddps --short" })
+        assertFalse("a failed upgrade changes nothing; no restart", changed)
     }
 
     @Test

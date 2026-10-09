@@ -138,8 +138,7 @@ object ServerInstaller {
 
     /**
      * Upgrades the plugin-managed simdref copy once a day, in the background.
-     * On a version change the simdref server restarts in every open project,
-     * because all projects share the one managed copy. A PATH install is never
+     * A new version applies at the next server start. A PATH install is never
      * touched: Provider calls this only for a managed binary.
      */
     fun maybeUpgradeInBackground(project: Project) {
@@ -147,8 +146,7 @@ object ServerInstaller {
         if (!busy.compareAndSet(false, true)) return
         object : Task.Backgroundable(project, "Upgrading simdref", false) {
             override fun run(indicator: ProgressIndicator) {
-                if (!upgradeOnce()) return
-                restartManagedProjects()
+                upgradeOnce()
             }
 
             override fun onThrowable(error: Throwable) {
@@ -162,41 +160,25 @@ object ServerInstaller {
     }
 
     /**
-     * Restarts the simdref server in each open project, but only when the
-     * resolved server command is the managed install. A PATH install keeps
-     * its server untouched (rule (a)).
-     */
-    internal fun restartManagedProjects() {
-        if (!upgradeRestartApplies()) return
-        for (p in com.intellij.openapi.project.ProjectManager.getInstance().openProjects) {
-            // All open projects share the one managed install, so each restarts.
-            restartOnEdt(p)
-        }
-    }
-
-    /** True when find() resolves to the managed install. Testable restart gate. */
-    internal fun upgradeRestartApplies(): Boolean = managesBin(find() ?: "")
-
-    /**
      * The synchronous auto-update body. Once a day, per UTC day: the
      * update-<day> marker exists or the whole check is skipped. shortcut: a
      * check still running at midnight UTC can overlap the next day's check,
-     * add an OS lock if that is ever reported. The upgrade always runs
-     * `isa vaddps --short` once: the refresh costs 0.4 s and downloads
-     * nothing when simdref is current, so the version comparison only gates
-     * the restart. Returns true only when the version changed, so the caller
-     * restarts the server.
+     * add an OS lock if that is ever reported. After the upgrade it always
+     * runs `isa vaddps --short`: the call costs ~0.4 s and downloads nothing
+     * when the catalog is current, and it downloads the catalog when the
+     * version changed. A new simdref version applies at the next server
+     * start.
      */
-    internal fun upgradeOnce(): Boolean {
+    internal fun upgradeOnce() {
         val dir = home()
         val marker = dir.resolve("update-" + System.currentTimeMillis() / 86_400_000L)
         try {
             Files.createFile(marker)
         } catch (e: java.nio.file.FileAlreadyExistsException) {
-            return false
+            return
         } catch (e: Exception) {
             log.warn("simdref auto-update marker failed", e)
-            return false
+            return
         }
         try {
             Files.newDirectoryStream(dir, "update-*").use { stream ->
@@ -206,32 +188,15 @@ object ServerInstaller {
             }
             val env = uvEnv(dir)
             val isa = binDir().resolve("isa$exe").toString()
-            val before = runOutput(listOf(isa, "--version"), env)
             val upgrade = runLogged(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
             if (upgrade.isNotEmpty()) log.warn("simdref auto-update upgrade failed: ${upgrade.takeLast(500)}")
             // A nonzero refresh is logged, not hidden: it also appears in the idea log.
             val refresh = runLogged(listOf(isa, "vaddps", "--short"), env)
             if (refresh.isNotEmpty()) log.warn("simdref auto-update refresh failed: ${refresh.takeLast(500)}")
-            val after = runOutput(listOf(isa, "--version"), env)
-            // Restart only when the after-version is readable and differs.
-            return after.isNotEmpty() && after != before
         } catch (e: Exception) {
             log.warn("simdref auto-update failed", e)
-            return false
         }
     }
-
-    private fun restartOnEdt(project: Project) {
-        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            // ponytail: replacement API starts in 2026.2; migrate when 2026.1 support ends
-            @Suppress("DEPRECATION")
-            LspServerManager.getInstance(project).stopAndRestartIfNeeded(SimdrefLspServerSupportProvider::class.java)
-        }
-    }
-
-    /** Empty output on a non-zero exit or timeout, so a failed probe never counts as a version. */
-    private fun runOutput(cmd: List<String>, env: Map<String, String>): String =
-        runLogged(cmd, env, "")
 
     /**
      * Runs [cmd] with a [timeoutMs] limit; a timeout kills the process and
@@ -278,6 +243,24 @@ object ServerInstaller {
         }
         reader.isDaemon = true
         reader.start()
+        // Track the descendants while the parent runs: once the parent
+        // exits, its children re-parent to init and descendants() on the
+        // dead handle returns nothing. The watcher collects what it sees;
+        // the finally below kills what is still alive from that list.
+        // shortcut: a parent that exits in microseconds orphans a child
+        // before the first sample runs; the plugin's real children (uv,
+        // isa) run for seconds, so this never fires in production. Switch
+        // to a setsid kill if it ever does.
+        val handle = p.toHandle()
+        val seen = java.util.concurrent.ConcurrentHashMap.newKeySet<ProcessHandle>()
+        val watcher = Thread {
+            while (handle.isAlive) {
+                handle.descendants().forEach { seen.add(it) }
+                try { Thread.sleep(5) } catch (_: InterruptedException) { return@Thread }
+            }
+        }
+        watcher.isDaemon = true
+        watcher.start()
         try {
             done = p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (e: InterruptedException) {
@@ -285,17 +268,21 @@ object ServerInstaller {
             // interrupted thread. The flag is restored after the finally.
             interrupted = true
         } finally {
-            // Timeout, interrupt, and normal exit alike: kill the children,
-            // kill the process when it still lives, wait for the exit, and
-            // join the reader so no thread or process outlives the call.
-            if (!done) {
-                p.toHandle().descendants().forEach { it.destroyForcibly() }
-            }
+            // Always: kill what the watcher last saw, kill the process when
+            // it still lives, wait for the exit, and join the reader so no
+            // thread or process outlives the call. A reader still alive
+            // after its join holds the stream; close it so the read ends.
+            seen.forEach { if (it.isAlive) it.destroyForcibly() }
+            p.toHandle().descendants().forEach { it.destroyForcibly() }
             if (p.isAlive) {
                 p.destroyForcibly()
                 p.waitFor()
             }
             reader.join(5_000)
+            if (reader.isAlive) {
+                try { p.inputStream.close() } catch (_: Exception) {}
+                reader.join(1_000)
+            }
         }
         val out = synchronized(buf) { buf.toString(Charsets.UTF_8) }
         if (interrupted) {

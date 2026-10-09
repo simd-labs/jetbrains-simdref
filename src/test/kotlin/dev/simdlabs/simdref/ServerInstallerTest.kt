@@ -81,6 +81,36 @@ class ServerInstallerTest {
         assertFalse("the child must be dead before the check", Files.exists(marker))
     }
 
+    /**
+     * A parent that exits normally can leave a child behind. runLogged must
+     * kill it anyway: the child touches a marker after 2 s; the test waits
+     * past that before it checks. Mutation: gate the descendants kill on
+     * `!done` and this test FAILS. Windows skip: POSIX sh only. shortcut: the
+     * parent stays for 200 ms so the watcher's first sample sees the child;
+     * a parent that exits in microseconds orphans the child before any JVM
+     * call can enumerate it (ServerInstaller.runLogged documents the limit).
+     */
+    @Test(timeout = 20_000)
+    fun normalExitKillsRemainingChildren() {
+        assumeWindowsSkip()
+        val dir = Files.createTempDirectory("simdref-normal")
+        val marker = dir.resolve("child-alive")
+        val script = dir.resolve("parent.sh")
+        Files.writeString(
+            script,
+            "#!/bin/sh\nexport MARKER=\"$1\"\nsh -c 'sleep 2; touch \"${'$'}MARKER\"' &\nsleep 0.2\nexit 0\n"
+        )
+        script.toFile().setExecutable(true)
+        ServerInstaller.runLogged(
+            listOf("sh", script.toString(), marker.toString()),
+            emptyMap(),
+            null,
+            10_000,
+        )
+        Thread.sleep(3_000) // past the child's 2 s
+        assertFalse("the child must be dead before the check", Files.exists(marker))
+    }
+
     private fun assumeWindowsSkip() {
         org.junit.Assume.assumeFalse("POSIX sh only", com.intellij.openapi.util.SystemInfo.isWindows)
     }

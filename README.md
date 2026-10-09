@@ -17,7 +17,7 @@ The plugin uses the native JetBrains LSP API (`com.intellij.modules.lsp`). The I
 
 - CLion, IntelliJ IDEA (unified), and other JetBrains IDEs that ship the LSP API. IDEA Community and Android Studio do not.
 
-Inlay hints: the plugin installs the newest simdref.
+Inlay hints: the plugin installs the newest simdref, and upgrades it once a day. A new simdref version applies at the next server start.
 The IDE caps LSP inlay hints at 42 characters. The plugin increases this limit to 100 (the platform maximum) through `LspInlayHintSupport.getMaxInlayHintChars`.
 
 ## Automatic install

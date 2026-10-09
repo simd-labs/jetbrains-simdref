@@ -78,6 +78,9 @@ object ServerInstaller {
     /** The prefix that marks the plugin-managed simdref-lsp (rule (a): never upgrade a PATH install). */
     fun privateBinPrefix(): String = binDir().toString() + File.separator
 
+    /** True only for the plugin-managed binary; a PATH install is never upgraded. */
+    fun managesBin(bin: String): Boolean = bin.startsWith(privateBinPrefix())
+
     /** All uv writes stay inside [dir]. */
     fun uvEnv(dir: Path): Map<String, String> = mapOf(
         "UV_TOOL_DIR" to dir.resolve("tools").toString(),
@@ -138,41 +141,19 @@ object ServerInstaller {
         lastCheckMillis == null || nowMillis - lastCheckMillis >= UPDATE_CHECK_INTERVAL_MS
 
     /**
-     * Upgrades the plugin-managed simdref copy at most once every 24 h. The
-     * stamp is written before the upgrade, so an offline day retries tomorrow,
-     * not on every file open. A PATH install is never touched. A version change
-     * makes isa refresh the catalog once (see simdref cli.py ensure_runtime);
-     * an unchanged version downloads nothing.
+     * Upgrades the plugin-managed simdref copy once a day, in the background.
+     * The stamp is written inside [upgradeOnce] before the upgrade, so an
+     * offline day retries tomorrow, not on every file open. A PATH install is
+     * never touched: Provider calls this only for a managed binary. A version
+     * change makes isa refresh the catalog once (see simdref cli.py
+     * ensure_runtime); an unchanged version downloads nothing.
      */
-    fun maybeUpgradeInBackground(project: Project, stamp: Path = home().resolve("last-update-check")) {
+    fun maybeUpgradeInBackground(project: Project) {
         if (!Files.isExecutable(binDir().resolve("simdref-lsp$exe"))) return
-        val fresh = try {
-            Files.exists(stamp) && !stampIsStale(Files.getLastModifiedTime(stamp).toMillis(), System.currentTimeMillis())
-        } catch (e: Exception) {
-            log.warn("simdref auto-update check failed", e)
-            return
-        }
-        if (fresh) return
-        try {
-            Files.writeString(stamp, Instant.now().toString())
-        } catch (e: Exception) {
-            log.warn("simdref auto-update stamp failed", e)
-            return
-        }
         if (!upgrading.compareAndSet(false, true)) return
         object : Task.Backgroundable(project, "Upgrading simdref", false) {
             override fun run(indicator: ProgressIndicator) {
-                val dir = home()
-                val env = uvEnv(dir)
-                val isa = binDir().resolve("isa$exe").toString()
-                val before = runOutput(listOf(isa, "--version"), env)
-                run(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
-                if (versionChanged(before, runOutput(listOf(isa, "--version"), env))) {
-                    // A lookup triggers ensure_runtime, which re-downloads the catalog
-                    // only on a version change. `isa vaddps --short` exits 0.
-                    runOutput(listOf(isa, "vaddps", "--short"), env)
-                    restartOnEdt(project)
-                }
+                if (upgradeOnce()) restartOnEdt(project)
             }
 
             override fun onThrowable(error: Throwable) {
@@ -183,6 +164,40 @@ object ServerInstaller {
                 upgrading.set(false)
             }
         }.queue()
+    }
+
+    /**
+     * The synchronous auto-update body: stamp freshness, upgrade, version
+     * compare, catalog refresh. Runs nothing when the stamp is fresh. Returns
+     * true only when the version changed, so the caller restarts the server.
+     */
+    internal fun upgradeOnce(): Boolean {
+        val stamp = home().resolve("last-update-check")
+        val fresh = try {
+            Files.exists(stamp) && !stampIsStale(Files.getLastModifiedTime(stamp).toMillis(), System.currentTimeMillis())
+        } catch (e: Exception) {
+            log.warn("simdref auto-update check failed", e)
+            return false
+        }
+        if (fresh) return false
+        try {
+            Files.writeString(stamp, Instant.now().toString())
+        } catch (e: Exception) {
+            log.warn("simdref auto-update stamp failed", e)
+            return false
+        }
+        val dir = home()
+        val env = uvEnv(dir)
+        val isa = binDir().resolve("isa$exe").toString()
+        val before = runOutput(listOf(isa, "--version"), env)
+        run(listOf(dir.resolve("uv$exe").toString(), "tool", "upgrade", "simdref"), env)
+        val after = runOutput(listOf(isa, "--version"), env)
+        // A failed probe after the upgrade means no refresh and no restart.
+        if (after.isEmpty() || !versionChanged(before, after)) return false
+        // A lookup triggers ensure_runtime, which re-downloads the catalog
+        // only on a version change. `isa vaddps --short` exits 0.
+        runOutput(listOf(isa, "vaddps", "--short"), env)
+        return true
     }
 
     /** True when the --version output changed across an upgrade. */
@@ -196,12 +211,13 @@ object ServerInstaller {
         }
     }
 
+    /** Empty output on a non-zero exit, so a failed probe never counts as a version. */
     private fun runOutput(cmd: List<String>, env: Map<String, String>): String {
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
         pb.environment().putAll(env)
         val p = pb.start()
         val out = p.inputStream.bufferedReader().readText()
-        p.waitFor()
+        if (p.waitFor() != 0) return ""
         return out
     }
 

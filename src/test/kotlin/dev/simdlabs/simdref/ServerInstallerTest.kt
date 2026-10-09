@@ -13,7 +13,7 @@ import org.junit.Test
 class ServerInstallerTest {
     /**
      * Drives the real throttle decision through ServerInstaller.stampIsStale.
-     * A missing stamp or one at least 24 h old means upgrade; a fresh stamp
+     * A missing stamp or one at least a day old means upgrade; a fresh stamp
      * means skip. Mutation check: drop the interval comparison and the
      * "fresh stamp" assertions FAIL.
      */

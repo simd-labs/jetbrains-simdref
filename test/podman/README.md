@@ -54,7 +54,10 @@ Success is exit code 0 and two files: `work/out/shot-s.png` (assembly) and `work
 
 ## Update the screenshots
 
-The `screenshots` branch is a single-commit orphan branch that holds the primary README images. Force-push to update it. Do not commit PNGs to `main`.
+To update the screenshots in the main README, replace the single commit at `refs/assets/screenshots`.
+Push it with `--force` to that ref.
+Point the README links at the new commit sha.
+Do not commit PNGs to `main`.
 
 ## Notes
 

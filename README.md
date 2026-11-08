@@ -1,1 +1,1 @@
-Screenshots for the main README. This branch has one commit; it is replaced, not appended.
+Screenshots for the main README. The main README links pin the newest commit sha of this branch.

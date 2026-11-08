@@ -13,5 +13,7 @@ wait_log 'starting LSP server: .*/simdref/bin/simdref-lsp' 900 || { shot shot-fa
 wait_log 'LSP server initialized' 60 || { shot shot-fail; echo "FAIL: no initialized line"; exit 1; }
 sleep 8
 shot shot-install
+# Clean shutdown so the accepted state is flushed to disk for the screenshot run.
+stop_ide
 grep -E 'starting LSP server: .*/simdref/bin/simdref-lsp|LSP server initialized' "$LOG"
 echo "PASS"

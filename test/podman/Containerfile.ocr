@@ -1,0 +1,5 @@
+FROM localhost/jb-simdref-idea-nolsp
+# Add tesseract so the screenshot run can poll for hint and hover text on
+# screen (OCR) instead of fixed sleeps.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*

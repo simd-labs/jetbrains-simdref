@@ -59,31 +59,117 @@ click() { xdotool mousemove "$1" "$2" click 1; sleep 1; }
 shot() { import -window root "$W/out/$1.png" 2>/dev/null; }
 
 # open_file NAME: Search Everywhere style open (ctrl+shift+n).
+# open_file: focus the main IDE window first (no WM under Xvfb, so focus is
+# not inherited from closed dialogs and unfocused keystrokes are dropped).
+# Wait for a focusable window: the main window title is set late at startup
+# and is briefly empty.
 open_file() {
-  xdotool key --delay 60 ctrl+shift+n; sleep 2
+  local wid n
+  for n in $(seq 1 10); do
+    wid=$(xdotool search --name "project" 2>/dev/null | head -n1)
+    [ -n "$wid" ] && break
+    sleep 2
+  done
+  echo "open_file: wid=$wid all=$(xdotool search --name '' getwindowname %@ 2>/dev/null | tr '\n' '|')" >> "$W/out/open-debug.log"
+  [ -n "$wid" ] && xdotool windowfocus "$wid" && sleep 1
+  xdotool key --delay 60 --clearmodifiers ctrl+shift+n
+  sleep 2
+  shot dbg-open-afterkey
+  echo "open_file: after key all=$(xdotool search --name '' getwindowname %@ 2>/dev/null | tr '\n' '|')" >> "$W/out/open-debug.log"
+  # The Search Everywhere popup is a top-level window named "win0". If the
+  # keystroke route produced nothing (input focus not on the main window),
+  # fall back to clicking the toolbar search icon (screen coords for the
+  # 1600x1000 shot layout); that route is position-based, no focus needed.
+  if ! xdotool search --name "win0" 2>/dev/null | grep -q .; then
+    echo "open_file: no win0, clicking search icon" >> "$W/out/open-debug.log"
+    xdotool mousemove 1304 35 click 1
+    sleep 2
+  fi
   xdotool type --delay 50 "$1"; sleep 2
+  shot dbg-open-aftertype
   xdotool key Return
+  echo "open_file: after return all=$(xdotool search --name '' getwindowname %@ 2>/dev/null | tr '\n' '|')" >> "$W/out/open-debug.log"
 }
 
-# first_run: click through EULA, Data Sharing and the theme page. Coordinates are for 1920x1080.
+# open_file_and_verify NAME: open, then poll the window title for the file
+# name (the title is "<file> - project"). Retry the whole sequence: a lost
+# keystroke must not pass silently.
+open_file_and_verify() {
+  local a i
+  for a in 1 2 3; do
+    open_file "$1"
+    for i in $(seq 1 15); do
+      xdotool search --name "" getwindowname %@ 2>/dev/null | grep -q "$1" && return 0
+      sleep 2
+    done
+  done
+  return 1
+}
+
+# first_run: click through EULA, Data Sharing and any welcome page.
+# Focus each dialog window before acting: on a fresh Xvfb the pointer and
+# keyboard focus are not on the dialog, and unfocused clicks and keys are
+# dropped (this is why the repo's original coordinate-only clicks stalled).
+# Clicks are relative to the dialog window origin (fixed 600x460 dialog),
+# so they work on any screen size: the repo's absolute coords only fit
+# 1920x1080.
+dclick() { # WID DX DY
+  local g
+  g=$(xdotool getwindowgeometry --shell "$1")
+  eval "$g"
+  xdotool mousemove $(( X + $2 )) $(( Y + $3 )) click 1
+  sleep 1
+}
 first_run() {
-  local eula="" ds="" skip="" t i
+  local eula="" ds="" t wid i
   for i in $(seq 1 100); do
     sleep 3
     kill -0 "$IPID" 2>/dev/null || { echo "idea exited at $((i * 3))s"; return 1; }
     t=$(xdotool search --name "" getwindowname %@ 2>/dev/null | tr '\n' '|')
     echo "t=$((i * 3))s titles=$t" >> "$W/out/titles.log"
-    if [ -z "$eula" ] && echo "$t" | grep -qi "User Agreement"; then
-      click 703 704; click 1200 743; eula=done; continue
+    # Main window up and no dialog: nothing left to do (already-accepted
+    # state, or the dialogs were just cleared).
+    if echo "$t" | grep -q 'project' && ! echo "$t" | grep -Eq "User Agreement|Data Sharing"; then
+      return 0
+    fi
+    if [ -z "$eula" ] && echo "$t" | grep -q "User Agreement"; then
+      wid=$(xdotool search --name "User Agreement" | head -n1)
+      xdotool windowfocus "$wid"
+      sleep 3
+      dclick "$wid" 43 394   # "I confirm that I have read and agree" checkbox
+      dclick "$wid" 539 431  # Continue (default button, bottom right)
+      eula=done; continue
     fi
     if [ -n "$eula" ] && [ -z "$ds" ] && echo "$t" | grep -q "Data Sharing"; then
-      click 984 741; ds=done; continue
+      wid=$(xdotool search --name "Data Sharing" | head -n1)
+      xdotool windowfocus "$wid"
+      sleep 2
+      dclick "$wid" 323 431  # Don't Send
+      ds=done; continue
     fi
-    if [ -n "$ds" ] && [ -z "$skip" ]; then
-      click 960 740; sleep 2; skip=done; return 0
+    if [ -n "$ds" ] && [ -n "$eula" ] && ! echo "$t" | grep -Eq "Data Sharing|User Agreement"; then
+      if echo "$t" | grep -Eqi 'welcome|theme'; then
+        click 960 740
+        sleep 2
+      fi
+      return 0
     fi
   done
+  shot dialog-stuck
   return 1
+}
+
+# stop_ide: TERM the IDE java process and wait for a clean exit so settings
+# (EULA acceptance, workspace) are flushed to disk.
+stop_ide() {
+  pkill -TERM -f 'jbr/bin/java' 2>/dev/null
+  local i
+  for i in $(seq 1 30); do
+    pgrep -f 'jbr/bin/java' >/dev/null 2>&1 || return 0
+    sleep 2
+  done
+  pkill -KILL -f 'jbr/bin/java' 2>/dev/null
+  return 0
 }
 
 # wait_log REGEX SECONDS: wait until idea.log has a line that matches.

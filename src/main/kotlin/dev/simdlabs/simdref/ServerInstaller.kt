@@ -9,7 +9,6 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.SystemInfo
-import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.util.io.Decompressor
 import com.intellij.util.system.CpuArch
 import java.io.File
@@ -106,12 +105,6 @@ object ServerInstaller {
                 } catch (e: Exception) {
                     notifyFailure(project, e)
                 }
-            }
-
-            override fun onSuccess() {
-                // ponytail: replacement API starts in 2026.2; migrate when 2026.1 support ends
-                @Suppress("DEPRECATION")
-                LspServerManager.getInstance(project).stopAndRestartIfNeeded(SimdrefLspServerSupportProvider::class.java)
             }
 
             override fun onFinished() {
@@ -304,6 +297,16 @@ object ServerInstaller {
 
     private fun downloadUv(dir: Path): Path = downloadUv(dir, 30_000)
 
+    /** sha256 of each uv $UV_TAG release archive, pinned in code. */
+    private val UV_SHA256 = mapOf(
+        "x86_64-pc-windows-msvc" to "75d05de6762778c31ee183398de7dd15093fad0ed90b1f236d8205ea5ec00c90",
+        "aarch64-pc-windows-msvc" to "13294e232ececbe709c06b74e6ced06f2a225ea5591476685362f22be56a50d5",
+        "x86_64-apple-darwin" to "960da44cb4b73685206ddd250b19e0a117fa41095710c1038f081f5cb613efb4",
+        "aarch64-apple-darwin" to "50487ae565ccd96e499056b4674d438f4c53170202617b4c759defe0c6a1b544",
+        "x86_64-unknown-linux-gnu" to "9167d72b3319674b6303c4cbe071854bba13ebdf3d76b1a7cbdc175471fb66d6",
+        "aarch64-unknown-linux-gnu" to "6524bd338177ed50d035d39354e12545e993bbeba2ecbddf0480c5b3a81d313f",
+    )
+
     fun downloadUv(dir: Path, timeoutMillis: Int): Path {
         val uv = dir.resolve("uv$exe")
         if (Files.isExecutable(uv)) return uv
@@ -319,7 +322,9 @@ object ServerInstaller {
         val part = dir.resolve("uv.$suffix.part")
         try {
             Files.write(part, fetchUrlBytes(URI(base).toURL(), timeoutMillis))
-            val expected = parseChecksum(fetchUrlText(URI("$base.sha256").toURL(), timeoutMillis))
+            // The hash is pinned in code, not read from the release: a
+            // tampered release page must fail the check, not feed it.
+            val expected = UV_SHA256.getValue(triple)
             if (!checksumMatches(part, expected)) error("uv checksum mismatch: expected $expected, got ${sha256Hex(part)}")
             Files.move(part, archive, ATOMIC_MOVE, REPLACE_EXISTING)
         } finally {
@@ -348,12 +353,10 @@ object ServerInstaller {
         tar.extract(dir)
     }
 
-    private fun run(cmd: List<String>, env: Map<String, String>) {
-        val pb = ProcessBuilder(cmd).redirectErrorStream(true)
-        pb.environment().putAll(env)
-        val p = pb.start()
-        val out = p.inputStream.bufferedReader().readText()
-        if (p.waitFor() != 0) error("${cmd.take(3).joinToString(" ")} failed: ${out.takeLast(500)}")
+    /** The install path must not hang: the same timeout and tree kill as the daily path. */
+    internal fun run(cmd: List<String>, env: Map<String, String>, timeoutMs: Long = PROCESS_TIMEOUT_MS) {
+        val out = runLogged(cmd, env, null, timeoutMs)
+        if (out.isNotEmpty()) error("${cmd.take(3).joinToString(" ")} failed: ${out.takeLast(500)}")
     }
 
     fun notifyFailure(project: Project, e: Throwable) {

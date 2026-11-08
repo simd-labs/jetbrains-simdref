@@ -82,6 +82,41 @@ class ServerInstallerTest {
     }
 
     /**
+     * JB1: the install-path spawn must kill a child that passes the timeout,
+     * same as the daily path. A 300 ms injected timeout against a 30 s
+     * sleeper: run() throws the timeout marker and the child dies. The
+     * child touches a marker after 2 s; the test waits past that.
+     * Mutation check: revert run() to the bare waitFor() body and this
+     * test FAILS: the sleeper exits 0 after 30 s, so no failure is
+     * thrown, or the JUnit timeout fires.
+     */
+    @Test(timeout = 20_000)
+    fun installPathRunKillsTheTreeOnTimeout() {
+        assumeWindowsSkip()
+        val dir = Files.createTempDirectory("simdref-run-timeout")
+        val marker = dir.resolve("child-alive")
+        val script = dir.resolve("sleeper.sh")
+        Files.writeString(
+            script,
+            "#!/bin/sh\nexport MARKER=\"$1\"\nsh -c 'sleep 2; touch \"${'$'}MARKER\"' &\nsleep 30\n"
+        )
+        script.toFile().setExecutable(true)
+        val start = System.nanoTime()
+        var failed = false
+        try {
+            ServerInstaller.run(listOf("sh", script.toString(), marker.toString()), emptyMap(), 300)
+        } catch (e: IllegalStateException) {
+            failed = true
+            assertTrue("a timeout reports it: ${e.message}", e.message?.contains("timeout") == true)
+        }
+        assertTrue("a stalled child must fail the install spawn", failed)
+        val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
+        assertTrue("waited for the exit, not the 30 s sleep: ${elapsedMs}ms", elapsedMs < 10_000)
+        Thread.sleep(3_000) // past the child's 2 s: a live child has written the marker by now
+        assertFalse("the child must be dead before the check", Files.exists(marker))
+    }
+
+    /**
      * A parent that exits normally can leave a child behind. runLogged must
      * kill it anyway: the child touches a marker after 2 s; the test waits
      * past that before it checks. Mutation: gate the descendants kill on

@@ -8,6 +8,7 @@ class ExtensionTest {
     @Test
     fun supportsAsmAndCExtensions() {
         for (e in SUPPORTED_EXTENSIONS) assertTrue(e, isSupportedExtension(e))
+        assertTrue(isSupportedExtension("ptx"))
     }
 
     @Test

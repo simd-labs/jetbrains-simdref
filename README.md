@@ -7,9 +7,9 @@
 
 This plugin shows SIMD instruction documentation in JetBrains IDEs. It runs the `simdref-lsp` language server for hover text and a one-line brief in an inlay hint.
 
-The plugin is active in assembly files (`.s`, `.S`, `.asm`).
+The plugin is active in assembly files (`.s`, `.S`, `.asm`, `.ptx`).
 Also in C and C++ files (`.c`, `.cc`, `.cpp`, `.cxx`, `.c++`, `.h`, `.hpp`, `.hh`, `.hxx`, `.cu`, `.cuh`).
-In C and C++, the server gives hints only in `asm` string literals.
+In C and C++, the server gives hints only in `asm` string literals. In `.cu`, PTX words in these strings get hints too.
 The IDE has no NASM file type without another plugin, so `.nasm` files get no hints.
 
 Quick Documentation shows the full simdref page from the local catalog. It works offline. The shortcut is Ctrl+Q on Linux and Windows, F1 on macOS.

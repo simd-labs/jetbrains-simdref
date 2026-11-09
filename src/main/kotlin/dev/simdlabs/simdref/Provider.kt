@@ -8,7 +8,7 @@ import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import com.intellij.platform.lsp.api.customization.LspCustomization
 import com.intellij.platform.lsp.api.customization.LspInlayHintSupport
 
-val SUPPORTED_EXTENSIONS = setOf("s", "S", "asm", "c", "cc", "cpp", "cxx", "c++", "h", "hpp", "hh", "hxx", "cu", "cuh")
+val SUPPORTED_EXTENSIONS = setOf("s", "S", "asm", "ptx", "c", "cc", "cpp", "cxx", "c++", "h", "hpp", "hh", "hxx", "cu", "cuh")
 
 fun isSupportedExtension(ext: String?): Boolean = ext in SUPPORTED_EXTENSIONS
 
